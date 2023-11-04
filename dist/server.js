@@ -26,7 +26,7 @@ const serveHTML = (res, filePath) => {
             return;
         }
         res.writeHead(200, "Ok", { "Content-Type": "text/html" });
-        data?.pipe(res);
+        data === null || data === void 0 ? void 0 : data.pipe(res);
     });
 };
 const serveJS = (res, filePath) => {
@@ -37,12 +37,13 @@ const serveJS = (res, filePath) => {
             return;
         }
         res.writeHead(200, "Ok", { "Content-Type": "text/javascript" });
-        stream?.pipe(res);
+        stream === null || stream === void 0 ? void 0 : stream.pipe(res);
         return;
     });
 };
 const server = createServer((req, res) => {
-    const url = new URL(req.url ?? "/404.html", `http://${req.headers.host}`);
+    var _a;
+    const url = new URL((_a = req.url) !== null && _a !== void 0 ? _a : "/404.html", `http://${req.headers.host}`);
     if (url.pathname === "/") {
         url.pathname = "/home";
     }
@@ -52,6 +53,16 @@ const server = createServer((req, res) => {
             return serveJS(res, url.pathname);
         }
         return serveHTML(res, url.pathname);
+    }
+    if (req.method === "POST") {
+        // const buffer = Buffer.from()
+        console.log(req);
+        req.on("data", (chunk) => {
+            console.log(JSON.parse(Buffer.from(chunk).toString('utf8')));
+        });
+        req.on("end", () => {
+            res.end("Ok");
+        });
     }
 });
 server.listen(PORT);

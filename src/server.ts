@@ -62,7 +62,17 @@ const server = createServer((req, res) => {
 		if (extname(url.pathname) === ".js") {
 			return serveJS(res, url.pathname);
 		}
-		return serveHTML(res, url.pathname)
+		return serveHTML(res, url.pathname);
+	}
+	if (req.method === "POST") {
+		// const buffer = Buffer.from()
+		console.log(req);
+		req.on("data", (chunk) => {
+			console.log(JSON.parse(Buffer.from(chunk).toString('utf8')));
+		});
+		req.on("end", () => {
+			res.end("Ok");
+		});
 	}
 });
 
