@@ -13,6 +13,8 @@ const filesMetaDataToJSON = (files: FileList) => {
 	});
 };
 
+const UPLOAD_METADATA_ROUTE = '/file-metadata'
+
 window.addEventListener("load", () => {
 	const selectedFile = document.getElementById("selected-file");
 	const uploadButton = document.getElementById("upload-button");
@@ -43,12 +45,14 @@ window.addEventListener("load", () => {
 			selectedFile instanceof HTMLInputElement &&
 			selectedFile.files?.length
 		) {
-			let request = new Request("test.txt", {
+			console.log(JSON.stringify(filesMetaDataToJSON(selectedFile.files)))
+			let request = new Request(UPLOAD_METADATA_ROUTE, {
 				method: "POST",
 				body: JSON.stringify(filesMetaDataToJSON(selectedFile.files)),
 			});
 			const serverResponse = await fetch(request);
 			console.log(serverResponse);
+			
 		}
 	});
 });

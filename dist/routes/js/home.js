@@ -22,6 +22,7 @@ const filesMetaDataToJSON = (files) => {
         return;
     });
 };
+const UPLOAD_METADATA_ROUTE = '/file-metadata';
 window.addEventListener("load", () => {
     const selectedFile = document.getElementById("selected-file");
     const uploadButton = document.getElementById("upload-button");
@@ -49,7 +50,8 @@ window.addEventListener("load", () => {
         var _a;
         if (selectedFile instanceof HTMLInputElement &&
             ((_a = selectedFile.files) === null || _a === void 0 ? void 0 : _a.length)) {
-            let request = new Request("test.txt", {
+            console.log(JSON.stringify(filesMetaDataToJSON(selectedFile.files)));
+            let request = new Request(UPLOAD_METADATA_ROUTE, {
                 method: "POST",
                 body: JSON.stringify(filesMetaDataToJSON(selectedFile.files)),
             });
