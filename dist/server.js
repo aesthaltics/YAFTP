@@ -13,21 +13,22 @@ import fsAsync from "fs/promises";
 import { URL, fileURLToPath } from "url";
 import path, { extname } from "path";
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
+const LOG_DELIMITER = () => console.log('------------------');
 const STORAGE_DIRECTORY = path.join(__dirname, "storage");
 // Routes
 // GET
 const ROUTE_PATH = path.join(__dirname, "routes");
 const SCRIPTS_PATH = path.join(ROUTE_PATH, "js");
 const PORT = 42069;
-const handleMetaData = (req, res) => {
+const handleMetaData = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     const currentTime = Date.now().toString();
-    fs.mkdirSync(path.join(STORAGE_DIRECTORY, currentTime), {
+    yield fsAsync.mkdir(path.join(STORAGE_DIRECTORY, currentTime), {
         recursive: true,
     });
     let stringifiedFiles = "";
     req.on("data", (chunk) => {
-        const buffer = Buffer.from(chunk).toString("utf-8");
-        stringifiedFiles += buffer;
+        const stringifiedChunk = Buffer.from(chunk).toString("utf-8");
+        stringifiedFiles = stringifiedFiles.concat(stringifiedChunk);
     });
     req.on("end", () => __awaiter(void 0, void 0, void 0, function* () {
         let filesArray = JSON.parse(stringifiedFiles);
@@ -36,9 +37,9 @@ const handleMetaData = (req, res) => {
             let promsises = filesArray.map((fileData) => {
                 return fsAsync.writeFile(path.join(STORAGE_DIRECTORY, currentTime, fileData.name), "");
             });
-            promsises.push(fsAsync.writeFile(path.join(STORAGE_DIRECTORY, currentTime, 'manifest.json'), stringifiedFiles));
+            promsises.push(fsAsync.writeFile(path.join(STORAGE_DIRECTORY, currentTime, "manifest.json"), stringifiedFiles));
             yield Promise.all(promsises);
-            res.writeHead(200, 'Ok');
+            res.writeHead(200, "Ok");
             res.end(`${currentTime}`);
             return;
         }
@@ -49,7 +50,38 @@ const handleMetaData = (req, res) => {
         res.writeHead(200, "Ok");
         res.end("Ok");
     }));
-};
+});
+const handleUpload = (req, res, url) => __awaiter(void 0, void 0, void 0, function* () {
+    const uploadID = url.searchParams.get("id");
+    const fileName = url.searchParams.get("file");
+    if (uploadID === null || fileName === null) {
+        console.log('request did not contain id or file params');
+        // TODO: respond with bad query code
+        return res.end();
+    }
+    const filePath = path.join(STORAGE_DIRECTORY, uploadID, fileName);
+    try {
+        yield fsAsync.access(filePath);
+        const file = fs.createWriteStream(filePath, { 'encoding': 'binary' });
+        req.pipe(file);
+        file.on('finish', () => {
+            // TODO: better response
+            console.log(`${fileName} has been saved!`);
+            res.end('File was saved!');
+        });
+        file.on('error', (error) => {
+            console.log("Could not save file");
+            console.log(error.message);
+            // TODO: better response
+            res.end('Could not save file');
+        });
+    }
+    catch (error) {
+        // TODO: respond with bad query code
+        console.log(`Could not save file ${fileName}`);
+        return res.end();
+    }
+});
 const createFileStream = (filePath, callback) => {
     fs.access(filePath, fs.constants.R_OK, (err) => {
         if (err) {
@@ -91,7 +123,19 @@ const server = createServer((req, res) => __awaiter(void 0, void 0, void 0, func
     if (url.pathname === "/") {
         url.pathname = "/home";
     }
-    console.log(url);
+    LOG_DELIMITER();
+    console.log(`Path: ${url.pathname}`);
+    if (url.search.length > 0) {
+        console.log(`Search: ${url.search}`);
+        for (const [name, value] of url.searchParams) {
+            console.log(`Search Param: ${name} = ${value}`);
+        }
+    }
+    // log delimiter on close, in case there is logging by other functions related to the same request
+    res.on('close', () => {
+        LOG_DELIMITER();
+        console.log('\n\n\n');
+    });
     if (req.method === "GET") {
         if (extname(url.pathname) === ".js") {
             return serveJS(res, url.pathname);
@@ -101,9 +145,12 @@ const server = createServer((req, res) => __awaiter(void 0, void 0, void 0, func
     if (req.method === "POST") {
         // const buffer = Buffer.from()
         if (url.pathname === "/file-metadata") {
-            return yield handleMetaData(req, res);
+            return handleMetaData(req, res);
         }
-        console.log(req);
+        if (url.pathname === "/file-upload") {
+            console.log(req.headers);
+            return handleUpload(req, res, url);
+        }
     }
 }));
 server.listen(PORT);

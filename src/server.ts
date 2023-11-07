@@ -18,6 +18,7 @@ type fileData = {
 };
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
+const LOG_DELIMITER = () => console.log('------------------')
 
 const STORAGE_DIRECTORY = path.join(__dirname, "storage");
 
@@ -29,15 +30,15 @@ const SCRIPTS_PATH = path.join(ROUTE_PATH, "js");
 
 const PORT = 42069;
 
-const handleMetaData = (req: IncomingMessage, res: ServerResponse) => {
+const handleMetaData = async (req: IncomingMessage, res: ServerResponse) => {
 	const currentTime = Date.now().toString();
-	fs.mkdirSync(path.join(STORAGE_DIRECTORY, currentTime), {
+	await fsAsync.mkdir(path.join(STORAGE_DIRECTORY, currentTime), {
 		recursive: true,
 	});
 	let stringifiedFiles = "";
 	req.on("data", (chunk) => {
-		const buffer = Buffer.from(chunk).toString("utf-8")
-		stringifiedFiles += buffer
+		const stringifiedChunk = Buffer.from(chunk).toString("utf-8");
+		stringifiedFiles = stringifiedFiles.concat(stringifiedChunk);
 	});
 	req.on("end", async () => {
 		let filesArray = JSON.parse(stringifiedFiles);
@@ -45,20 +46,63 @@ const handleMetaData = (req: IncomingMessage, res: ServerResponse) => {
 
 		if (filesArray instanceof Array) {
 			let promsises = filesArray.map((fileData: fileData) => {
-				return fsAsync.writeFile(path.join(STORAGE_DIRECTORY, currentTime, fileData.name), "")
+				return fsAsync.writeFile(
+					path.join(STORAGE_DIRECTORY, currentTime, fileData.name),
+					""
+				);
 			});
-			promsises.push(fsAsync.writeFile(path.join(STORAGE_DIRECTORY, currentTime, 'manifest.json'), stringifiedFiles))
-			await Promise.all(promsises)
-			res.writeHead(200, 'Ok')
+			promsises.push(
+				fsAsync.writeFile(
+					path.join(STORAGE_DIRECTORY, currentTime, "manifest.json"),
+					stringifiedFiles
+				)
+			);
+			await Promise.all(promsises);
+			res.writeHead(200, "Ok");
 			res.end(`${currentTime}`);
-			return
-		}else{
-			res.writeHead(400, "Bad Request")
-			res.end("Data is not stringified array")
+			return;
+		} else {
+			res.writeHead(400, "Bad Request");
+			res.end("Data is not stringified array");
 		}
 		res.writeHead(200, "Ok");
 		res.end("Ok");
 	});
+};
+
+const handleUpload = async (
+	req: IncomingMessage,
+	res: ServerResponse,
+	url: URL
+) => {
+	const uploadID = url.searchParams.get("id");
+	const fileName = url.searchParams.get("file");
+	if (uploadID === null || fileName === null) {
+		console.log('request did not contain id or file params')
+		// TODO: respond with bad query code
+		return res.end();
+	}
+	const filePath = path.join(STORAGE_DIRECTORY, uploadID, fileName);
+	try {
+		await fsAsync.access(filePath);
+		const file = fs.createWriteStream(filePath, {'encoding': 'binary'})
+		req.pipe(file)
+		file.on('finish', () => {
+			// TODO: better response
+			console.log(`${fileName} has been saved!`)
+			res.end('File was saved!')
+		})
+		file.on('error', (error) => {
+			console.log("Could not save file")
+			console.log(error.message)
+			// TODO: better response
+			res.end('Could not save file')
+		})
+	} catch (error) {
+		// TODO: respond with bad query code
+		console.log(`Could not save file ${fileName}`)
+		return res.end()
+	}
 };
 
 const createFileStream = (
@@ -110,7 +154,24 @@ const server = createServer(async (req, res) => {
 	if (url.pathname === "/") {
 		url.pathname = "/home";
 	}
-	console.log(url);
+
+	LOG_DELIMITER()
+	console.log(`Path: ${url.pathname}`);
+	if (url.search.length > 0){
+		console.log(`Search: ${url.search}`)
+		for (const [name, value] of url.searchParams){
+			console.log(`Search Param: ${name} = ${value}`)
+		}
+	}
+
+	// log delimiter on close, in case there is logging by other functions related to the same request
+	// this breaks when multiple requests happen simultaniously
+	// TODO: fix this
+	res.on('close', () => {
+		LOG_DELIMITER()
+		console.log('\n\n\n')
+	})
+
 	if (req.method === "GET") {
 		if (extname(url.pathname) === ".js") {
 			return serveJS(res, url.pathname);
@@ -120,9 +181,12 @@ const server = createServer(async (req, res) => {
 	if (req.method === "POST") {
 		// const buffer = Buffer.from()
 		if (url.pathname === "/file-metadata") {
-			return await handleMetaData(req, res);
+			return handleMetaData(req, res);
 		}
-		console.log(req);
+		if (url.pathname === "/file-upload") {
+			console.log(req.headers)
+			return handleUpload(req, res, url);
+		}
 	}
 });
 
