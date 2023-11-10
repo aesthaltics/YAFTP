@@ -12,14 +12,35 @@ import fs from "fs";
 import fsAsync from "fs/promises";
 import { URL, fileURLToPath } from "url";
 import path, { extname } from "path";
+import pg from "pg";
+const { Client } = pg;
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
-const LOG_DELIMITER = () => console.log('------------------');
+const LOG_DELIMITER = () => console.log("------------------");
 const STORAGE_DIRECTORY = path.join(__dirname, "storage");
 // Routes
 // GET
 const ROUTE_PATH = path.join(__dirname, "routes");
 const SCRIPTS_PATH = path.join(ROUTE_PATH, "js");
 const PORT = 42069;
+const client = await (() => __awaiter(void 0, void 0, void 0, function* () {
+    const client = new Client({
+        host: process.env.DATABASE_HOST,
+        port: process.env.DATABASE_PORT,
+        database: process.env.DATABASE_NAME,
+        user: process.env.DATABASE_USER,
+    });
+    yield client.connect();
+    return client;
+}))();
+const connectToDatabase = () => __awaiter(void 0, void 0, void 0, function* () {
+    console.log(yield client.query('SELECT * FROM "files";'));
+});
+const insertFileToDatabase = (fileName) => __awaiter(void 0, void 0, void 0, function* () {
+    const insertText = "INSERT INTO files(\"file-name\") VALUES($1) RETURNING *";
+    const insertedValue = [fileName];
+    const res = yield client.query(insertText, insertedValue);
+    console.log(res.rows[0]);
+});
 const handleMetaData = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     const currentTime = Date.now().toString();
     yield fsAsync.mkdir(path.join(STORAGE_DIRECTORY, currentTime), {
@@ -55,25 +76,25 @@ const handleUpload = (req, res, url) => __awaiter(void 0, void 0, void 0, functi
     const uploadID = url.searchParams.get("id");
     const fileName = url.searchParams.get("file");
     if (uploadID === null || fileName === null) {
-        console.log('request did not contain id or file params');
+        console.log("request did not contain id or file params");
         // TODO: respond with bad query code
         return res.end();
     }
     const filePath = path.join(STORAGE_DIRECTORY, uploadID, fileName);
     try {
         yield fsAsync.access(filePath);
-        const file = fs.createWriteStream(filePath, { 'encoding': 'binary' });
+        const file = fs.createWriteStream(filePath, { encoding: "binary" });
         req.pipe(file);
-        file.on('finish', () => {
+        file.on("finish", () => {
             // TODO: better response
             console.log(`${fileName} has been saved!`);
-            res.end('File was saved!');
+            res.end("File was saved!");
         });
-        file.on('error', (error) => {
+        file.on("error", (error) => {
             console.log("Could not save file");
             console.log(error.message);
             // TODO: better response
-            res.end('Could not save file');
+            res.end("Could not save file");
         });
     }
     catch (error) {
@@ -132,9 +153,11 @@ const server = createServer((req, res) => __awaiter(void 0, void 0, void 0, func
         }
     }
     // log delimiter on close, in case there is logging by other functions related to the same request
-    res.on('close', () => {
+    // this breaks when multiple requests happen simultaniously
+    // TODO: fix this
+    res.on("close", () => {
         LOG_DELIMITER();
-        console.log('\n\n\n');
+        console.log("\n\n\n");
     });
     if (req.method === "GET") {
         if (extname(url.pathname) === ".js") {
@@ -154,6 +177,7 @@ const server = createServer((req, res) => __awaiter(void 0, void 0, void 0, func
     }
 }));
 server.listen(PORT);
-server.on("listening", () => {
+server.on("listening", () => __awaiter(void 0, void 0, void 0, function* () {
     console.log(`Server listening on http://localhost:${PORT}`);
-});
+    yield insertFileToDatabase('test.txt');
+}));

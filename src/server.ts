@@ -9,6 +9,9 @@ import fs from "fs";
 import fsAsync from "fs/promises";
 import { URL, fileURLToPath } from "url";
 import path, { extname } from "path";
+import pg from "pg";
+
+const { Client } = pg;
 
 type fileData = {
 	name: string;
@@ -18,7 +21,7 @@ type fileData = {
 };
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
-const LOG_DELIMITER = () => console.log('------------------')
+const LOG_DELIMITER = () => console.log("------------------");
 
 const STORAGE_DIRECTORY = path.join(__dirname, "storage");
 
@@ -29,6 +32,24 @@ const ROUTE_PATH = path.join(__dirname, "routes");
 const SCRIPTS_PATH = path.join(ROUTE_PATH, "js");
 
 const PORT = 42069;
+
+const client = await (async () => {
+	const client = new Client({
+		host: process.env.DATABASE_HOST,
+		port: process.env.DATABASE_PORT,
+		database: process.env.DATABASE_NAME,
+		user: process.env.DATABASE_USER,
+	});
+	await client.connect();
+	return client;
+})();
+
+const insertFileToDatabase = async (fileName: string) => {
+	const insertText = "INSERT INTO files(\"file-name\") VALUES($1) RETURNING *"
+	const insertedValue = [fileName]
+	const res = await client.query(insertText, insertedValue)
+	console.log(res.rows[0])
+};
 
 const handleMetaData = async (req: IncomingMessage, res: ServerResponse) => {
 	const currentTime = Date.now().toString();
@@ -78,30 +99,30 @@ const handleUpload = async (
 	const uploadID = url.searchParams.get("id");
 	const fileName = url.searchParams.get("file");
 	if (uploadID === null || fileName === null) {
-		console.log('request did not contain id or file params')
+		console.log("request did not contain id or file params");
 		// TODO: respond with bad query code
 		return res.end();
 	}
 	const filePath = path.join(STORAGE_DIRECTORY, uploadID, fileName);
 	try {
 		await fsAsync.access(filePath);
-		const file = fs.createWriteStream(filePath, {'encoding': 'binary'})
-		req.pipe(file)
-		file.on('finish', () => {
+		const file = fs.createWriteStream(filePath, { encoding: "binary" });
+		req.pipe(file);
+		file.on("finish", () => {
 			// TODO: better response
-			console.log(`${fileName} has been saved!`)
-			res.end('File was saved!')
-		})
-		file.on('error', (error) => {
-			console.log("Could not save file")
-			console.log(error.message)
+			console.log(`${fileName} has been saved!`);
+			res.end("File was saved!");
+		});
+		file.on("error", (error) => {
+			console.log("Could not save file");
+			console.log(error.message);
 			// TODO: better response
-			res.end('Could not save file')
-		})
+			res.end("Could not save file");
+		});
 	} catch (error) {
 		// TODO: respond with bad query code
-		console.log(`Could not save file ${fileName}`)
-		return res.end()
+		console.log(`Could not save file ${fileName}`);
+		return res.end();
 	}
 };
 
@@ -155,22 +176,22 @@ const server = createServer(async (req, res) => {
 		url.pathname = "/home";
 	}
 
-	LOG_DELIMITER()
+	LOG_DELIMITER();
 	console.log(`Path: ${url.pathname}`);
-	if (url.search.length > 0){
-		console.log(`Search: ${url.search}`)
-		for (const [name, value] of url.searchParams){
-			console.log(`Search Param: ${name} = ${value}`)
+	if (url.search.length > 0) {
+		console.log(`Search: ${url.search}`);
+		for (const [name, value] of url.searchParams) {
+			console.log(`Search Param: ${name} = ${value}`);
 		}
 	}
 
 	// log delimiter on close, in case there is logging by other functions related to the same request
 	// this breaks when multiple requests happen simultaniously
 	// TODO: fix this
-	res.on('close', () => {
-		LOG_DELIMITER()
-		console.log('\n\n\n')
-	})
+	res.on("close", () => {
+		LOG_DELIMITER();
+		console.log("\n\n\n");
+	});
 
 	if (req.method === "GET") {
 		if (extname(url.pathname) === ".js") {
@@ -184,7 +205,7 @@ const server = createServer(async (req, res) => {
 			return handleMetaData(req, res);
 		}
 		if (url.pathname === "/file-upload") {
-			console.log(req.headers)
+			console.log(req.headers);
 			return handleUpload(req, res, url);
 		}
 	}
@@ -192,6 +213,7 @@ const server = createServer(async (req, res) => {
 
 server.listen(PORT);
 
-server.on("listening", () => {
+server.on("listening", async () => {
 	console.log(`Server listening on http://localhost:${PORT}`);
+	await insertFileToDatabase('test.txt')
 });
