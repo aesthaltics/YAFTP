@@ -16,5 +16,9 @@
   "devDependencies": {
     "@types/node": "^20.8.10",
     "copyfiles": "^2.4.1"
+  },
+  "dependencies": {
+    "@types/pg": "^8.10.9",
+    "pg": "^8.11.3"
   }
 }
