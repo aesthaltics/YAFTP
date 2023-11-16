@@ -14,6 +14,12 @@ import { URL, fileURLToPath } from "url";
 import path, { extname } from "path";
 import pg from "pg";
 const { Client } = pg;
+const filesColumns = {
+    filePath: "FilePath",
+    fileName: "FileName",
+    fileType: "FileType",
+    fileSize: "FileSize",
+};
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 const LOG_DELIMITER = () => console.log("------------------");
 const STORAGE_DIRECTORY = path.join(__dirname, "storage");
@@ -32,18 +38,16 @@ const client = await (() => __awaiter(void 0, void 0, void 0, function* () {
     yield client.connect();
     return client;
 }))();
-const connectToDatabase = () => __awaiter(void 0, void 0, void 0, function* () {
-    console.log(yield client.query('SELECT * FROM "files";'));
-});
-const insertFileToDatabase = (fileName) => __awaiter(void 0, void 0, void 0, function* () {
-    const insertText = "INSERT INTO files(\"file-name\") VALUES($1) RETURNING *";
-    const insertedValue = [fileName];
+const insertFileToDatabase = (fileName, filePath, fileType, fileSize) => __awaiter(void 0, void 0, void 0, function* () {
+    const insertText = `INSERT INTO files(\"FilePath\", \"${filesColumns.fileName}\", \"${filesColumns.fileType}\", \"${filesColumns.fileSize}\") VALUES($1, $2, $3, $4) RETURNING *`;
+    const insertedValue = [filePath, fileName, fileType, fileSize];
     const res = yield client.query(insertText, insertedValue);
     console.log(res.rows[0]);
 });
 const handleMetaData = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     const currentTime = Date.now().toString();
-    yield fsAsync.mkdir(path.join(STORAGE_DIRECTORY, currentTime), {
+    const directoryPath = path.join(STORAGE_DIRECTORY, currentTime);
+    yield fsAsync.mkdir(directoryPath, {
         recursive: true,
     });
     let stringifiedFiles = "";
@@ -56,10 +60,13 @@ const handleMetaData = (req, res) => __awaiter(void 0, void 0, void 0, function*
         console.log(filesArray);
         if (filesArray instanceof Array) {
             let promsises = filesArray.map((fileData) => {
-                return fsAsync.writeFile(path.join(STORAGE_DIRECTORY, currentTime, fileData.name), "");
+                return [
+                    insertFileToDatabase(fileData.name, path.join(directoryPath, fileData.name), fileData.type, fileData.size),
+                    fsAsync.writeFile(path.join(STORAGE_DIRECTORY, currentTime, fileData.name), ""),
+                ];
             });
-            promsises.push(fsAsync.writeFile(path.join(STORAGE_DIRECTORY, currentTime, "manifest.json"), stringifiedFiles));
-            yield Promise.all(promsises);
+            promsises.push([fsAsync.writeFile(path.join(STORAGE_DIRECTORY, currentTime, "manifest.json"), stringifiedFiles)]);
+            yield Promise.all(promsises.flat(1));
             res.writeHead(200, "Ok");
             res.end(`${currentTime}`);
             return;
@@ -179,5 +186,4 @@ const server = createServer((req, res) => __awaiter(void 0, void 0, void 0, func
 server.listen(PORT);
 server.on("listening", () => __awaiter(void 0, void 0, void 0, function* () {
     console.log(`Server listening on http://localhost:${PORT}`);
-    yield insertFileToDatabase('test.txt');
 }));
