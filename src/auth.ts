@@ -56,8 +56,7 @@ const isExactUser = (obj: any): obj is User => {
 };
 
 const hashPassword = (
-	password: string,
-	callback: (err: Error | null, hash: Buffer) => void
+	password: string
 ) => {
 	const normalizedPassword = password.normalize("NFC");
 	const salt = randomBytes(16).toString("hex");
@@ -81,11 +80,11 @@ const authenticateUser = () => {};
 const storeUser = async (user: User) => {
 	const databaseTable = process.env.DATABASE_TABLES["users"];
 	const tableColumns = process.env.DATABASE_FIELDS[databaseTable];
-	hashPassword(user.password, (err, hash) => {});
+	const hashedPassword = hashPassword(user.password);
 	return await databaseInsert(
 		databaseTable,
 		[tableColumns["user_name"], tableColumns["password"]],
-		[user.userName]
+		[user.userName, hashedPassword]
 	);
 };
 
