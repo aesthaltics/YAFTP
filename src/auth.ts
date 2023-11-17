@@ -4,6 +4,9 @@ import pg from "pg";
 import { nextTick } from "process";
 import { error, table } from "console";
 import { scrypt, randomBytes } from "crypto";
+import { DATABASE_TABLES, SCRYPT_VARIABLES, ONE_GB_IN_BYTES } from "./serverInfo.js";
+
+
 const { Client } = pg;
 const client = await (async () => {
 	const client = new Client({
@@ -35,6 +38,7 @@ const databaseInsert = async (
 		", "
 	)}) VALUES(${valuesString})`;
 	try {
+		console.log(`Query sent to db: ${insertText}`);
 		return await client.query(insertText, values);
 	} catch (error) {
 		Promise.reject(error);
@@ -46,54 +50,109 @@ const isExactUser = (obj: any): obj is User => {
 	const hasValidProps =
 		obj &&
 		typeof obj === "object" &&
-		typeof obj.username === "string" &&
+		typeof obj.userName === "string" &&
 		typeof obj.password === "string";
+	if (!hasValidProps) {
+		console.log("user does not have valid props");
+	}
 
 	// Check if there are no additional properties
 	const hasOnlyValidProps = hasValidProps && Object.keys(obj).length === 2;
 
+	if (hasValidProps && !hasOnlyValidProps) {
+		console.log("user has too many props");
+	}
+
+	if (hasOnlyValidProps) {
+		console.log("user has valid format");
+	}
+
 	return hasValidProps && hasOnlyValidProps;
 };
 
-const hashPassword = (
-	password: string
-) => {
+const hashPassword = (password: string) => {
+	// TODO: pepper?
 	const normalizedPassword = password.normalize("NFC");
-	const salt = randomBytes(16).toString("hex");
-	const N = process.env.SCRYPT_N;
-	const r = process.env.SCRYPT_r;
-	const p = process.env.SCRYPT_p;
-	const keyLen = process.env.SCRYPT_dkLen;
-	console.log(`N: ${N}`);
-	return new Promise<Buffer>((resolve, reject) => {
-		scrypt(normalizedPassword, salt, keyLen, {'N': N, 'p':p, 'r':r}, (err: Error|null, hash: Buffer) => {
-			if (err){
-				return reject(err)
+	const salt = randomBytes(16)
+
+	const { N, r, p, dkLen} = SCRYPT_VARIABLES;
+	const maxmem = SCRYPT_VARIABLES.maxmem()
+
+	return new Promise<{ hash: Buffer; salt: Buffer }>((resolve, reject) => {
+		scrypt(
+			normalizedPassword,
+			salt,
+			dkLen,
+			{ N: N, p: p, r: r, maxmem: maxmem },
+			(err: Error | null, hash: Buffer) => {
+				if (err) {
+					console.log(err)
+					return reject(err);
+				}
+				console.log(hash)
+				return resolve({ hash: hash, salt: salt });
 			}
-			return resolve(hash)
-		});
+		);
 	});
 };
 
 const authenticateUser = () => {};
 
 const storeUser = async (user: User) => {
-	const databaseTable = process.env.DATABASE_TABLES["users"];
-	const tableColumns = process.env.DATABASE_FIELDS[databaseTable];
-	const hashedPassword = hashPassword(user.password);
+	// TODO: Don't allow usernames that already exists
+	const table = DATABASE_TABLES.users
+	const { hash, salt } = await hashPassword(user.password);
+	console.log(hash.toString("hex"));
 	return await databaseInsert(
-		databaseTable,
-		[tableColumns["user_name"], tableColumns["password"]],
-		[user.userName, hashedPassword]
+		table.table_name,
+		[
+			table.user_name,
+			table.password,
+			table.salt,
+			table.max_space
+		],
+		[user.userName, hash.toString('hex'), salt.toString('hex'), ONE_GB_IN_BYTES]
 	);
 };
 
 const registerUser = async (req: IncomingMessage, res: ServerResponse) => {
 	const userData = await requestDataToJSON(req);
 	if (isExactUser(userData)) {
-		storeUser(userData as User);
+		console.log(`user details: ${userData}`);
+		try {
+			const queryResult = await storeUser(userData as User);
+			res.writeHead(200, {
+				"Content-Type": "application/json",
+				"x-content-type-options": "nosniff",
+			});
+			return res.end(JSON.stringify({ message: "user created!" }));
+		} catch (error) {
+			console.log(
+				`there was a problem inserting the user to the database: ${JSON.stringify(
+					userData
+				)}`
+			);
+
+			res.writeHead(400, {
+				"Content-Type": "application/json",
+				"x-content-type-options": "nosniff",
+			});
+			return res.end(
+				JSON.stringify({ message: "could not create user" })
+			);
+		}
 	} else {
-		// TODO: return bad request
+		console.log(
+			`the userdata is not formatted correctly: ${JSON.stringify(
+				userData
+			)}`
+		);
+
+		res.writeHead(400, {
+			"Content-Type": "application/json",
+			"x-content-type-options": "nosniff",
+		});
+		return res.end(JSON.stringify({ message: "could not create user" }));
 	}
 };
 
