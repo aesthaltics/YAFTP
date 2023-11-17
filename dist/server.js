@@ -13,6 +13,7 @@ import fsAsync from "fs/promises";
 import { URL, fileURLToPath } from "url";
 import path, { extname } from "path";
 import pg from "pg";
+import { registerUser } from "./auth.js";
 const { Client } = pg;
 const filesColumns = {
     filePath: "FilePath",
@@ -27,6 +28,10 @@ const STORAGE_DIRECTORY = path.join(__dirname, "storage");
 // GET
 const ROUTE_PATH = path.join(__dirname, "routes");
 const SCRIPTS_PATH = path.join(ROUTE_PATH, "js");
+// POST
+const UPLOAD_METADATA_ROUTE = "/file-metadata";
+const UPLOAD_FILE_ROUTE = "/file-upload";
+const USER_REGISTRATION_ROUTE = "/register-user";
 const PORT = 42069;
 const client = await (() => __awaiter(void 0, void 0, void 0, function* () {
     const client = new Client({
@@ -38,6 +43,22 @@ const client = await (() => __awaiter(void 0, void 0, void 0, function* () {
     yield client.connect();
     return client;
 }))();
+export const requestDataToJSON = (req) => __awaiter(void 0, void 0, void 0, function* () {
+    let stringifiedJSON = "";
+    return new Promise((resolve, reject) => {
+        req.on("data", (chunk) => {
+            const stringifiedChunk = Buffer.from(chunk).toString("utf-8");
+            stringifiedJSON = stringifiedJSON.concat(stringifiedChunk);
+        });
+        req.on("end", () => __awaiter(void 0, void 0, void 0, function* () {
+            let dataAsJSON = JSON.parse(stringifiedJSON);
+            resolve(dataAsJSON);
+        }));
+        req.on("error", (error) => {
+            reject(error);
+        });
+    });
+});
 const insertFileToDatabase = (fileName, filePath, fileType, fileSize) => __awaiter(void 0, void 0, void 0, function* () {
     const insertText = `INSERT INTO files(\"FilePath\", \"${filesColumns.fileName}\", \"${filesColumns.fileType}\", \"${filesColumns.fileSize}\") VALUES($1, $2, $3, $4) RETURNING *`;
     const insertedValue = [filePath, fileName, fileType, fileSize];
@@ -50,34 +71,29 @@ const handleMetaData = (req, res) => __awaiter(void 0, void 0, void 0, function*
     yield fsAsync.mkdir(directoryPath, {
         recursive: true,
     });
-    let stringifiedFiles = "";
-    req.on("data", (chunk) => {
-        const stringifiedChunk = Buffer.from(chunk).toString("utf-8");
-        stringifiedFiles = stringifiedFiles.concat(stringifiedChunk);
-    });
-    req.on("end", () => __awaiter(void 0, void 0, void 0, function* () {
-        let filesArray = JSON.parse(stringifiedFiles);
-        console.log(filesArray);
-        if (filesArray instanceof Array) {
-            let promsises = filesArray.map((fileData) => {
-                return [
-                    insertFileToDatabase(fileData.name, path.join(directoryPath, fileData.name), fileData.type, fileData.size),
-                    fsAsync.writeFile(path.join(STORAGE_DIRECTORY, currentTime, fileData.name), ""),
-                ];
-            });
-            promsises.push([fsAsync.writeFile(path.join(STORAGE_DIRECTORY, currentTime, "manifest.json"), stringifiedFiles)]);
-            yield Promise.all(promsises.flat(1));
-            res.writeHead(200, "Ok");
-            res.end(`${currentTime}`);
-            return;
-        }
-        else {
-            res.writeHead(400, "Bad Request");
-            res.end("Data is not stringified array");
-        }
+    const filesArray = yield requestDataToJSON(req);
+    console.log(filesArray);
+    if (filesArray instanceof Array) {
+        let promsises = filesArray.map((fileData) => {
+            return [
+                insertFileToDatabase(fileData.name, path.join(directoryPath, fileData.name), fileData.type, fileData.size),
+                fsAsync.writeFile(path.join(STORAGE_DIRECTORY, currentTime, fileData.name), ""),
+            ];
+        });
+        promsises.push([
+            fsAsync.writeFile(path.join(STORAGE_DIRECTORY, currentTime, "manifest.json"), JSON.stringify(filesArray)),
+        ]);
+        yield Promise.all(promsises.flat(1));
         res.writeHead(200, "Ok");
-        res.end("Ok");
-    }));
+        res.end(`${currentTime}`);
+        return;
+    }
+    else {
+        res.writeHead(400, "Bad Request");
+        res.end("Data is not stringified array");
+    }
+    res.writeHead(200, "Ok");
+    res.end("Ok");
 });
 const handleUpload = (req, res, url) => __awaiter(void 0, void 0, void 0, function* () {
     const uploadID = url.searchParams.get("id");
@@ -174,12 +190,15 @@ const server = createServer((req, res) => __awaiter(void 0, void 0, void 0, func
     }
     if (req.method === "POST") {
         // const buffer = Buffer.from()
-        if (url.pathname === "/file-metadata") {
+        if (url.pathname === UPLOAD_METADATA_ROUTE) {
             return handleMetaData(req, res);
         }
-        if (url.pathname === "/file-upload") {
+        if (url.pathname === UPLOAD_FILE_ROUTE) {
             console.log(req.headers);
             return handleUpload(req, res, url);
+        }
+        if (url.pathname === USER_REGISTRATION_ROUTE) {
+            return registerUser(req, res);
         }
     }
 }));

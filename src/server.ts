@@ -61,7 +61,7 @@ const client = await (async () => {
 
 export const requestDataToJSON = async (req: IncomingMessage) => {
 	let stringifiedJSON = "";
-	return new Promise<{}>((resolve, reject) => {
+	return new Promise<object>((resolve, reject) => {
 		req.on("data", (chunk) => {
 			const stringifiedChunk = Buffer.from(chunk).toString("utf-8");
 			stringifiedJSON = stringifiedJSON.concat(stringifiedChunk);
