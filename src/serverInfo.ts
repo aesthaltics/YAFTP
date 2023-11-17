@@ -19,6 +19,6 @@ const SCRYPT_VARIABLES = {
 	},
 } as const;
 
-const ONE_GB_IN_BYTES = 10 ** 6;
+const ONE_GB_IN_BYTES = 10 ** 9;
 
 export { DATABASE_TABLES, SCRYPT_VARIABLES, ONE_GB_IN_BYTES };
