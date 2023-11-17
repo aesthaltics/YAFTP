@@ -1,2 +1,5 @@
-"use strict";
-console.log("test");
+const sendMetadata = () => {
+};
+const recieveMetaData = () => {
+};
+export { sendMetadata, recieveMetaData };
