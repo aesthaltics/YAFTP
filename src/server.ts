@@ -10,7 +10,7 @@ import fsAsync from "fs/promises";
 import { URL, fileURLToPath } from "url";
 import path, { extname, resolve } from "path";
 import pg from "pg";
-import { registerUser } from "./auth.js";
+import { loginUser, registerUser } from "./auth.js";
 
 const { Client } = pg;
 
@@ -45,6 +45,8 @@ const SCRIPTS_PATH = path.join(ROUTE_PATH, "js");
 const UPLOAD_METADATA_ROUTE = "/file-metadata";
 const UPLOAD_FILE_ROUTE = "/file-upload";
 const USER_REGISTRATION_ROUTE = "/register-user";
+const LOGIN_USER_ROUTE = "/login-user";
+
 
 const PORT = 42069;
 
@@ -210,6 +212,7 @@ const serveJS = (res: ServerResponse, filePath: string) => {
 	});
 };
 const server = createServer(async (req, res) => {
+	// TODO: convert long if-else chains to switch
 	const url = new URL(req.url ?? "/404.html", `http://${req.headers.host}`);
 	if (url.pathname === "/") {
 		url.pathname = "/home";
@@ -250,7 +253,12 @@ const server = createServer(async (req, res) => {
 		if (url.pathname === USER_REGISTRATION_ROUTE) {
 			return registerUser(req, res);
 		}
+		if (url.pathname === LOGIN_USER_ROUTE){
+			return loginUser(req, res)
+		}
 	}
+
+	// TODO: return bad request
 });
 
 server.listen(PORT);

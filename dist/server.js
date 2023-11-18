@@ -13,7 +13,7 @@ import fsAsync from "fs/promises";
 import { URL, fileURLToPath } from "url";
 import path, { extname } from "path";
 import pg from "pg";
-import { registerUser } from "./auth.js";
+import { loginUser, registerUser } from "./auth.js";
 const { Client } = pg;
 const filesColumns = {
     filePath: "FilePath",
@@ -32,6 +32,7 @@ const SCRIPTS_PATH = path.join(ROUTE_PATH, "js");
 const UPLOAD_METADATA_ROUTE = "/file-metadata";
 const UPLOAD_FILE_ROUTE = "/file-upload";
 const USER_REGISTRATION_ROUTE = "/register-user";
+const LOGIN_USER_ROUTE = "/login-user";
 const PORT = 42069;
 const client = await (() => __awaiter(void 0, void 0, void 0, function* () {
     const client = new Client({
@@ -163,6 +164,7 @@ const serveJS = (res, filePath) => {
 };
 const server = createServer((req, res) => __awaiter(void 0, void 0, void 0, function* () {
     var _a;
+    // TODO: convert long if-else chains to switch
     const url = new URL((_a = req.url) !== null && _a !== void 0 ? _a : "/404.html", `http://${req.headers.host}`);
     if (url.pathname === "/") {
         url.pathname = "/home";
@@ -200,7 +202,11 @@ const server = createServer((req, res) => __awaiter(void 0, void 0, void 0, func
         if (url.pathname === USER_REGISTRATION_ROUTE) {
             return registerUser(req, res);
         }
+        if (url.pathname === LOGIN_USER_ROUTE) {
+            return loginUser(req, res);
+        }
     }
+    // TODO: return bad request
 }));
 server.listen(PORT);
 server.on("listening", () => __awaiter(void 0, void 0, void 0, function* () {

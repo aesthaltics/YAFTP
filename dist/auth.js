@@ -10,7 +10,7 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
 import { requestDataToJSON } from "./server.js";
 import pg from "pg";
 import { scrypt, randomBytes } from "crypto";
-import { DATABASE_TABLES, SCRYPT_VARIABLES, ONE_GB_IN_BYTES } from "./serverInfo.js";
+import { DATABASE_TABLES, SCRYPT_VARIABLES, ONE_GB_IN_BYTES, } from "./serverInfo.js";
 const { Client } = pg;
 const client = await (() => __awaiter(void 0, void 0, void 0, function* () {
     const client = new Client({
@@ -59,35 +59,64 @@ const isExactUser = (obj) => {
     }
     return hasValidProps && hasOnlyValidProps;
 };
-const hashPassword = (password) => {
+const hashPassword = (password, salt) => {
     // TODO: pepper?
     const normalizedPassword = password.normalize("NFC");
-    const salt = randomBytes(16);
+    const effectiveSalt = salt ? Buffer.from(salt, "hex") : randomBytes(16);
     const { N, r, p, dkLen } = SCRYPT_VARIABLES;
     const maxmem = SCRYPT_VARIABLES.maxmem();
     return new Promise((resolve, reject) => {
-        scrypt(normalizedPassword, salt, dkLen, { N: N, p: p, r: r, maxmem: maxmem }, (err, hash) => {
+        scrypt(normalizedPassword, effectiveSalt, dkLen, { N: N, p: p, r: r, maxmem: maxmem }, (err, hashBuffer) => {
             if (err) {
                 console.log(err);
                 return reject(err);
             }
-            console.log(hash);
-            return resolve({ hash: hash, salt: salt });
+            const { stringifiedHash, stringifiedSalt } = stringifyHashAndSalt({
+                hash: hashBuffer,
+                salt: effectiveSalt,
+            });
+            return resolve({
+                hash: stringifiedHash,
+                salt: stringifiedSalt,
+            });
         });
     });
 };
-const authenticateUser = () => { };
+const stringifyHashAndSalt = ({ hash, salt, }) => {
+    const stringifiedHash = hash.toString("hex");
+    const stringifiedSalt = salt.toString("hex");
+    return { stringifiedHash, stringifiedSalt };
+};
+const authenticateUser = (user) => __awaiter(void 0, void 0, void 0, function* () {
+    if (!isExactUser(user)) {
+        Promise.reject(new Error("did not get valid user object"));
+    }
+    const hashAndSaltQuery = {
+        // putting user name in values prevent intjection attacks
+        text: "SELECT users.password, users.salt FROM users WHERE users.user_name = $1;",
+        values: [user.userName],
+    };
+    const hashAndSaltResponse = yield client.query(hashAndSaltQuery);
+    if (!hashAndSaltResponse.rowCount || hashAndSaltResponse.rowCount < 1) {
+        // username not in database
+        return false;
+    }
+    if (hashAndSaltResponse.rowCount > 1) {
+        // TODO: handle multiple users with same name(should never happen as username col has unique requirement)
+        return false;
+    }
+    const storedSalt = hashAndSaltResponse.rows[0]["salt"];
+    const storedPasswordHash = hashAndSaltResponse.rows[0]["password"];
+    const { hash: submittedPasswordHash, salt: submittedPasswordSalt } = yield hashPassword(user.password, storedSalt);
+    return (storedPasswordHash === submittedPasswordHash &&
+        storedSalt === submittedPasswordSalt);
+});
 const storeUser = (user) => __awaiter(void 0, void 0, void 0, function* () {
-    // TODO: 
+    // TODO: Don't allow usernames that already exists
     const table = DATABASE_TABLES.users;
     const { hash, salt } = yield hashPassword(user.password);
-    console.log(hash.toString("hex"));
-    return yield databaseInsert(table.table_name, [
-        table.user_name,
-        table.password,
-        table.salt,
-        table.max_space
-    ], [user.userName, hash.toString('hex'), salt.toString('hex'), ONE_GB_IN_BYTES]);
+    console.log(hash);
+    return yield databaseInsert(table.table_name, [table.user_name, table.password, table.salt, table.max_space], [user.userName, hash, salt, ONE_GB_IN_BYTES]);
 });
 const registerUser = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     const userData = yield requestDataToJSON(req);
@@ -119,4 +148,32 @@ const registerUser = (req, res) => __awaiter(void 0, void 0, void 0, function* (
         return res.end(JSON.stringify({ message: "could not create user" }));
     }
 });
-export { registerUser, isExactUser };
+const loginUser = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    const SUCCESS_MESSAGE = "success";
+    const FAIL_MESSAGE = "fail";
+    // TODO: create and respond with session token
+    const user = yield requestDataToJSON(req);
+    if (!isExactUser(user)) {
+        res.writeHead(401, {
+            "Content-Type": "application/json",
+            "x-content-type-options": "nosniff",
+        });
+        res.end(JSON.stringify({ message: FAIL_MESSAGE }));
+        return Promise.reject(new Error("provided data is not a valid user"));
+    }
+    const authenticated = yield authenticateUser(user);
+    if (authenticated) {
+        res.writeHead(200, {
+            "Content-Type": "application/json",
+            "x-content-type-options": "nosniff",
+        });
+        return res.end(JSON.stringify({ message: SUCCESS_MESSAGE }));
+    }
+    res.writeHead(401, {
+        "Content-Type": "application/json",
+        "x-content-type-options": "nosniff",
+    });
+    return res.end(JSON.stringify({ message: FAIL_MESSAGE }));
+    // return Promise.reject(new Error("provided data is not a valid user"));
+});
+export { registerUser, isExactUser, loginUser };

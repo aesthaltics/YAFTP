@@ -17,5 +17,5 @@ const SCRYPT_VARIABLES = {
         return 128 * this.N * this.r * 2;
     },
 };
-const ONE_GB_IN_BYTES = Math.pow(10, 6);
+const ONE_GB_IN_BYTES = Math.pow(10, 9);
 export { DATABASE_TABLES, SCRYPT_VARIABLES, ONE_GB_IN_BYTES };
