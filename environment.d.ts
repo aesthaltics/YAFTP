@@ -5,6 +5,7 @@ declare global {
 			DATABASE_HOST: string;
 			DATABASE_PORT: number;
 			DATABASE_NAME: string;
+			HTTPS_KEY_PASSPHRASE: string;
 		}
 	}
 	type User = {

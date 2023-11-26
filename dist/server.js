@@ -7,7 +7,7 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
         step((generator = generator.apply(thisArg, _arguments || [])).next());
     });
 };
-import { createServer, } from "http";
+import { createServer } from "https";
 import fs from "fs";
 import fsAsync from "fs/promises";
 import { URL, fileURLToPath } from "url";
@@ -162,7 +162,12 @@ const serveJS = (res, filePath) => {
         return;
     });
 };
-const server = createServer((req, res) => __awaiter(void 0, void 0, void 0, function* () {
+const httpsOptions = {
+    key: fs.readFileSync(path.join(__dirname, 'keys', 'key.pem')),
+    cert: fs.readFileSync(path.join(__dirname, 'keys', 'cert.pem')),
+    passphrase: process.env.HTTPS_KEY_PASSPHRASE
+};
+const server = createServer(httpsOptions, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     var _a;
     // TODO: convert long if-else chains to switch
     const url = new URL((_a = req.url) !== null && _a !== void 0 ? _a : "/404.html", `http://${req.headers.host}`);
@@ -210,5 +215,5 @@ const server = createServer((req, res) => __awaiter(void 0, void 0, void 0, func
 }));
 server.listen(PORT);
 server.on("listening", () => __awaiter(void 0, void 0, void 0, function* () {
-    console.log(`Server listening on http://localhost:${PORT}`);
+    console.log(`Server listening on https://localhost:${PORT}`);
 }));

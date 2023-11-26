@@ -1,10 +1,6 @@
-import {
-	ClientRequest,
-	IncomingMessage,
-	Server,
-	ServerResponse,
-	createServer,
-} from "http";
+import { IncomingMessage, ServerResponse } from "http";
+import { Server, createServer } from "https";
+
 import fs from "fs";
 import fsAsync from "fs/promises";
 import { URL, fileURLToPath } from "url";
@@ -20,8 +16,6 @@ type fileData = {
 	size: number;
 	type: string;
 };
-
-
 
 const filesColumns = {
 	filePath: "FilePath",
@@ -46,7 +40,6 @@ const UPLOAD_METADATA_ROUTE = "/file-metadata";
 const UPLOAD_FILE_ROUTE = "/file-upload";
 const USER_REGISTRATION_ROUTE = "/register-user";
 const LOGIN_USER_ROUTE = "/login-user";
-
 
 const PORT = 42069;
 
@@ -211,7 +204,15 @@ const serveJS = (res: ServerResponse, filePath: string) => {
 		return;
 	});
 };
-const server = createServer(async (req, res) => {
+
+const httpsOptions = {
+	key: fs.readFileSync(path.join(__dirname, 'keys', 'key.pem')),
+	cert: fs.readFileSync(path.join(__dirname, 'keys', 'cert.pem')),
+	passphrase: process.env.HTTPS_KEY_PASSPHRASE
+	
+}
+
+const server = createServer(httpsOptions, async (req, res) => {
 	// TODO: convert long if-else chains to switch
 	const url = new URL(req.url ?? "/404.html", `http://${req.headers.host}`);
 	if (url.pathname === "/") {
@@ -253,8 +254,8 @@ const server = createServer(async (req, res) => {
 		if (url.pathname === USER_REGISTRATION_ROUTE) {
 			return registerUser(req, res);
 		}
-		if (url.pathname === LOGIN_USER_ROUTE){
-			return loginUser(req, res)
+		if (url.pathname === LOGIN_USER_ROUTE) {
+			return loginUser(req, res);
 		}
 	}
 
@@ -264,5 +265,5 @@ const server = createServer(async (req, res) => {
 server.listen(PORT);
 
 server.on("listening", async () => {
-	console.log(`Server listening on http://localhost:${PORT}`);
+	console.log(`Server listening on https://localhost:${PORT}`);
 });
