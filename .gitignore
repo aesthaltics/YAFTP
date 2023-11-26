@@ -4,3 +4,4 @@ dist/storage/
 **/.DS_Store
 .env
 DB_Design.md
+**/keys
