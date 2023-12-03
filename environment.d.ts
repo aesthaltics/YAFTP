@@ -1,3 +1,7 @@
+import { IncomingMessage, ServerResponse } from "http";
+import { Readable } from "stream";
+import { URL } from "url";
+
 declare global {
 	namespace NodeJS {
 		interface ProcessEnv {
@@ -9,8 +13,18 @@ declare global {
 		}
 	}
 	type User = {
-		userName: string;
+		username: string;
 		password: string;
+	};
+
+	type RequestContext= {
+		userId: string;
+		isAuthenticated: boolean;
+		request: IncomingMessage;
+		response: ServerResponse;
+		URL: URL;
+		isAuthorized: boolean;
+		stream?: Readable
 	};
 }
 
