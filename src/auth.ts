@@ -9,6 +9,7 @@ import {
 	SCRYPT_VARIABLES,
 	ONE_GB_IN_BYTES,
 } from "./serverInfo.js";
+import { Readable } from "stream";
 
 const { Client } = pg;
 const client = await (async () => {
@@ -125,7 +126,7 @@ const authenticateUser = async (user: User): Promise<boolean> => {
 	const hashAndSaltQuery = {
 		// putting user name in values prevent intjection attacks
 		text: "SELECT users.password, users.salt FROM users WHERE users.user_name = $1;",
-		values: [user.userName],
+		values: [user.username],
 	};
 	const hashAndSaltResponse = await client.query(hashAndSaltQuery);
 	if (!hashAndSaltResponse.rowCount || hashAndSaltResponse.rowCount < 1) {
@@ -157,79 +158,75 @@ const storeUser = async (user: User) => {
 	return await databaseInsert(
 		table.table_name,
 		[table.user_name, table.password, table.salt, table.max_space],
-		[user.userName, hash, salt, ONE_GB_IN_BYTES]
+		[user.username, hash, salt, ONE_GB_IN_BYTES]
 	);
 };
 
-const registerUser = async (req: IncomingMessage, res: ServerResponse) => {
+const registerUser = async (req: IncomingMessage) => {
 	const userData = await requestDataToJSON(req);
 	if (isExactUser(userData)) {
-		console.log(`user details: ${userData}`);
+		// TODO: handle this log
+		// console.log(`user details: ${userData}`);
 		try {
 			const queryResult = await storeUser(userData as User);
-			res.writeHead(200, {
-				"Content-Type": "application/json",
-				"x-content-type-options": "nosniff",
-			});
-			return res.end(JSON.stringify({ message: "user created!" }));
+			return;
 		} catch (error) {
-			console.log(
-				`there was a problem inserting the user to the database: ${JSON.stringify(
-					userData
-				)}`
-			);
-
-			res.writeHead(400, {
-				"Content-Type": "application/json",
-				"x-content-type-options": "nosniff",
-			});
-			return res.end(
-				JSON.stringify({ message: "could not create user" })
-			);
+			// TODO: handle this log
+			// console.log(
+			// 	`there was a problem inserting the user to the database: ${JSON.stringify(
+			// 		userData
+			// 	)}`
+			// );
+			return Promise.reject("could not register user");
 		}
 	} else {
-		console.log(
-			`the userdata is not formatted correctly: ${JSON.stringify(
-				userData
-			)}`
-		);
+		// TODO: handle this log
+		// console.log(
+		// 	`the userdata is not formatted correctly: ${JSON.stringify(
+		// 		userData
+		// 	)}`
+		// );
 
-		res.writeHead(400, {
-			"Content-Type": "application/json",
-			"x-content-type-options": "nosniff",
-		});
-		return res.end(JSON.stringify({ message: "could not create user" }));
+		return Promise.reject("could not register user");
 	}
 };
 
-const loginUser = async (req: IncomingMessage, res: ServerResponse) => {
+const loginUser = async (context: RequestContext) => {
 	const SUCCESS_MESSAGE = "success";
 	const FAIL_MESSAGE = "fail";
 	// TODO: create and respond with session token
-	const user = await requestDataToJSON(req);
+	const user = await requestDataToJSON(context.request);
 	if (!isExactUser(user)) {
-		res.writeHead(401, {
+		context.response.writeHead(401, {
 			"Content-Type": "application/json",
 			"x-content-type-options": "nosniff",
 		});
-		res.end(JSON.stringify({ message: FAIL_MESSAGE }));
-		return Promise.reject(new Error("provided data is not a valid user"));
+		context.stream = Readable.from(
+			JSON.stringify({ message: FAIL_MESSAGE })
+		);
+		return Promise.reject(
+			new Error("provided data is not a valid user object")
+		);
 	}
 	const authenticated = await authenticateUser(user);
 
 	if (authenticated) {
-		res.writeHead(200, {
+		context.response.writeHead(200, {
 			"Content-Type": "application/json",
 			"x-content-type-options": "nosniff",
 		});
-		return res.end(JSON.stringify({ message: SUCCESS_MESSAGE }));
+
+		context.stream = Readable.from(
+			JSON.stringify({ message: SUCCESS_MESSAGE })
+		);
+		return
 	}
-	res.writeHead(401, {
+	context.response.writeHead(401, {
 		"Content-Type": "application/json",
 		"x-content-type-options": "nosniff",
 	});
-	return res.end(JSON.stringify({ message: FAIL_MESSAGE }));
-	// return Promise.reject(new Error("provided data is not a valid user"));
+	context.stream = Readable.from(JSON.stringify({ message: FAIL_MESSAGE }));
+	return Promise.reject(new Error("Unsuccessful login attempt"));
 };
 
-export { registerUser, isExactUser, loginUser };
+export { registerUser, isExactUser, loginUser, authenticateUser };
