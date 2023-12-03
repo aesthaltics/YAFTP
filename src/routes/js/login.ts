@@ -1,7 +1,7 @@
 const LOGIN_USER_ROUTE = "/login-user";
 
 const requestLogin = async (user: User) => {
-	if (user.userName.length < 1 || user.password.length < 1) {
+	if (user.username.length < 1 || user.password.length < 1) {
 		Promise.reject(new Error("not given username or password"));
 	}
 	const stringifiedUser = JSON.stringify(user);
@@ -46,7 +46,7 @@ window.addEventListener("load", (event) => {
 			passwordElement instanceof HTMLInputElement
 		) {
 			const userDetails: User = {
-				userName: userNameElement.value,
+				username: userNameElement.value,
 				password: passwordElement.value,
 			};
 			console.log(userDetails);
