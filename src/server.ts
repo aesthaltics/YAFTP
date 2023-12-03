@@ -6,7 +6,8 @@ import fsAsync from "fs/promises";
 import { URL, fileURLToPath } from "url";
 import path, { extname, resolve } from "path";
 import pg from "pg";
-import { loginUser, registerUser } from "./auth.js";
+import { authenticateUser, loginUser, registerUser } from "./auth.js";
+import { Readable } from "stream";
 
 const { Client } = pg;
 
@@ -25,7 +26,6 @@ const filesColumns = {
 };
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
-const LOG_DELIMITER = () => console.log("------------------");
 
 const STORAGE_DIRECTORY = path.join(__dirname, "storage");
 
@@ -113,51 +113,48 @@ const handleMetaData = async (req: IncomingMessage, res: ServerResponse) => {
 				JSON.stringify(filesArray)
 			),
 		]);
-		await Promise.all(promsises.flat(1));
-		res.writeHead(200, "Ok");
-		res.end(`${currentTime}`);
-		return;
+
+		try {
+			await Promise.all(promsises.flat(1));
+			return currentTime;
+		} catch (error) {
+			return Promise.reject("Could not store metadata");
+		}
 	} else {
 		res.writeHead(400, "Bad Request");
-		res.end("Data is not stringified array");
+		return Promise.reject("Data is not stringified array");
 	}
-	res.writeHead(200, "Ok");
-	res.end("Ok");
 };
 
-const handleUpload = async (
-	req: IncomingMessage,
-	res: ServerResponse,
-	url: URL
-) => {
-	const uploadID = url.searchParams.get("id");
-	const fileName = url.searchParams.get("file");
+const handleUpload = async (context: RequestContext) => {
+	const searchParams = context.URL.searchParams;
+	const uploadID = searchParams.get("id");
+	const fileName = searchParams.get("file");
 	if (uploadID === null || fileName === null) {
-		console.log("request did not contain id or file params");
-		// TODO: respond with bad query code
-		return res.end();
+		return Promise.reject("request did not contain id or file params");
 	}
 	const filePath = path.join(STORAGE_DIRECTORY, uploadID, fileName);
-	try {
-		await fsAsync.access(filePath);
-		const file = fs.createWriteStream(filePath, { encoding: "binary" });
-		req.pipe(file);
-		file.on("finish", () => {
-			// TODO: better response
-			console.log(`${fileName} has been saved!`);
-			res.end("File was saved!");
-		});
-		file.on("error", (error) => {
-			console.log("Could not save file");
-			console.log(error.message);
-			// TODO: better response
-			res.end("Could not save file");
-		});
-	} catch (error) {
-		// TODO: respond with bad query code
-		console.log(`Could not save file ${fileName}`);
-		return res.end();
-	}
+	return new Promise<void>((resolve, reject) => {
+		try {
+			const file = fs.createWriteStream(filePath, { encoding: "binary" });
+			context.request.pipe(file);
+			file.on("finish", () => {
+				// TODO: handle this log
+				// console.log(`${fileName} has been saved!`);
+				resolve();
+			});
+			file.on("error", (error) => {
+				// TODO: handle this log
+				// console.log("Could not save file");
+				// console.log(error.message);
+				reject(`Could not save: ${fileName}`);
+			});
+		} catch (error) {
+			// TODO: handle this log
+			// console.log(`Could not save: ${fileName}`);
+			reject(`Could not save: ${fileName}`);
+		}
+	});
 };
 
 const createFileStream = (
@@ -177,89 +174,281 @@ const serve404 = (): fs.ReadStream => {
 	return fs.createReadStream(path.join(ROUTE_PATH, "404", "index.html"));
 };
 
-const serveHTML = (res: ServerResponse, filePath: string) => {
-	createFileStream(
-		path.join(ROUTE_PATH, filePath, "index.html"),
-		(err, data) => {
-			if (err) {
-				res.writeHead(404, "Page not found");
-				serve404().pipe(res);
-				return;
+const serveHTML = (filePath: string) => {
+	return new Promise<Readable | undefined>((resolve, reject) => {
+		createFileStream(
+			path.join(ROUTE_PATH, filePath, "index.html"),
+			(err, data) => {
+				if (err) {
+					return reject(new Error("page not found"));
+					// res.writeHead(404, "Page not found");
+					// serve404().pipe(res);
+					// return;
+				}
+				// res.writeHead(200, "Ok", { "Content-Type": "text/html" });
+				// data?.pipe(res);
+				return resolve(data);
 			}
-			res.writeHead(200, "Ok", { "Content-Type": "text/html" });
-			data?.pipe(res);
-		}
-	);
+		);
+	});
 };
 
-const serveJS = (res: ServerResponse, filePath: string) => {
-	createFileStream(path.join(SCRIPTS_PATH, filePath), (err, stream) => {
-		if (err) {
-			res.writeHead(404, "Page not found");
-			res.end();
-			return;
-		}
-		res.writeHead(200, "Ok", { "Content-Type": "text/javascript" });
-		stream?.pipe(res);
-		return;
+const serveJS = (filePath: string) => {
+	return new Promise<Readable | undefined>((resolve, reject) => {
+		createFileStream(path.join(SCRIPTS_PATH, filePath), (err, stream) => {
+			if (err) {
+				return reject(new Error("script not found"));
+				// res.writeHead(404, "Page not found");
+				// res.end();
+				// return;
+			}
+			// res.writeHead(200, "Ok", { "Content-Type": "text/javascript" });
+			return resolve(stream);
+			// stream?.pipe(res);
+			// return;
+		});
 	});
+};
+
+const authenticate = async (context: RequestContext) => {
+	// TODO: update client to send authentication header
+	let userID = "";
+	const denyAuthentication = () => {
+		context.isAuthenticated = false;
+		context.userId = userID;
+		return false;
+	};
+	const acceptAuthentication = () => {
+		context.isAuthenticated = true;
+		context.userId = userID;
+		return true;
+	};
+	if (context.request.headers.authorization === undefined) {
+		return denyAuthentication();
+	}
+	const [scheme, params] = context.request.headers.authorization.split(" ");
+	if (scheme !== "Basic") {
+		return denyAuthentication();
+	}
+	const [userName, password] = atob(params).split(":");
+
+	userID = userName;
+
+	try {
+		const authenticated = await authenticateUser({
+			username: userName,
+			password: password,
+		});
+		if (!authenticated) {
+			return denyAuthentication();
+		}
+		return acceptAuthentication();
+	} catch (error) {
+		//TODO: handle error
+		return denyAuthentication();
+	}
+};
+
+const logRequest = (context: RequestContext) => {
+	//TODO: implement proper logging
+	let logString = "";
+	const delimiter = "\n------------------\n";
+
+	logString += delimiter;
+	logString += `Authenticated: ${context.isAuthenticated}\n`;
+	logString += `Username: ${context.userId}\n`;
+	logString += `Method: ${context.request.method}\n`;
+	logString += `Path: ${context.URL.pathname}\n`;
+
+	if (context.URL.search.length > 0) {
+		logString += `Search: ${context.URL.search}\n`;
+		for (const [name, value] of context.URL.searchParams) {
+			logString += `Search Param: ${name} = ${value}\n`;
+		}
+	}
+
+	logString += delimiter;
+
+	context.response.on("close", () => {
+		console.log(logString);
+	});
+	return;
+};
+
+const authorizeGet = (context: RequestContext) => {
+	//TODO: implement authorization of getting files etc.
+	//no routes require authentication yet
+	context.isAuthorized = true;
+	return;
+};
+
+const authorizePost = (context: RequestContext) => {
+	//TODO: implement authorization for sending files etc.
+	//no routes require authentication yet
+	context.isAuthorized = true;
+	return;
+};
+
+const authorize = (context: RequestContext) => {
+	const method = context.request.method;
+
+	if (method === undefined) {
+		return;
+	}
+
+	switch (method) {
+		case "get":
+			return authorizeGet(context);
+		case "post":
+			return authorizePost(context);
+		default:
+			return;
+	}
+};
+
+const setResponseHeaders = (context: RequestContext) => {
+	// TODO: set secure headers
+	if (!context.isAuthorized) {
+		if (!context.isAuthenticated) {
+			// Client provided wrong or no credentials
+			// TODO: set WWW-Autheticate header?
+			context.response.writeHead(401, "Unauthorized");
+		} else {
+			// Client not authorized to do this action
+			context.response.writeHead(403, "Forbidden");
+		}
+	}
+};
+
+const respond = (context: RequestContext) => {
+	if (context.stream !== undefined) {
+		context.stream.pipe(context.response);
+	} else {
+		context.response.end();
+	}
+	return;
+};
+
+const handleRequest = async (context: RequestContext) => {
+	const method = context.request.method;
+	if (method === undefined) {
+		return;
+	}
+	switch (method) {
+		case "get":
+			await handleGet(context);
+			break;
+		case "post":
+			await handlePost(context);
+			break;
+		default:
+			break;
+	}
+};
+
+const handleGet = async (context: RequestContext) => {
+	const path = context.URL.pathname;
+	let stream: Readable | undefined;
+	if (extname(path) === ".js") {
+		stream = await serveJS(path);
+	} else {
+		stream = await serveHTML(path);
+	}
+	if (stream === undefined) {
+		stream = serve404();
+	}
+	context.stream = stream;
+};
+
+const handlePost = async (context: RequestContext): Promise<void> => {
+	const path = context.URL.pathname;
+
+	switch (path) {
+		case UPLOAD_METADATA_ROUTE:
+			try {
+				const uploadID = await handleMetaData(
+					context.request,
+					context.response
+				);
+				context.stream = Readable.from(
+					JSON.stringify({ uploadID: uploadID })
+				);
+				context.response.writeHead(200, "OK");
+			} catch (error) {
+				context.response.writeHead(400, "Bad Request");
+				return Promise.reject(error);
+			}
+			break;
+		case UPLOAD_FILE_ROUTE:
+			try {
+				await handleUpload(context);
+				context.response.writeHead(200, "OK");
+			} catch (error) {
+				context.response.writeHead(500, "Internal Server Error");
+				return Promise.reject(error);
+			}
+			break;
+		case USER_REGISTRATION_ROUTE:
+			context.response.setHeader("Content-Type", "application/json");
+			context.response.setHeader("x-content-type-options", "nosniff");
+			try {
+				registerUser(context.request);
+				context.response.writeHead(200, "OK");
+				context.stream = Readable.from(
+					JSON.stringify({ message: "User created" })
+				);
+			} catch (error) {
+				context.response.writeHead(500, "Internal Server Error");
+				context.stream = Readable.from(
+					JSON.stringify({ message: "Could not create user" })
+				);
+				return Promise.reject(error);
+			}
+			break;
+		case LOGIN_USER_ROUTE:
+			try {
+				loginUser(context);
+			} catch (error) {
+				return Promise.reject(error);
+			}
+			break;
+		default:
+			break;
+	}
 };
 
 const httpsOptions = {
-	key: fs.readFileSync(path.join(__dirname, 'keys', 'key.pem')),
-	cert: fs.readFileSync(path.join(__dirname, 'keys', 'cert.pem')),
-	passphrase: process.env.HTTPS_KEY_PASSPHRASE
-	
-}
+	key: fs.readFileSync(path.join(__dirname, "keys", "key.pem")),
+	cert: fs.readFileSync(path.join(__dirname, "keys", "cert.pem")),
+	passphrase: process.env.HTTPS_KEY_PASSPHRASE,
+};
 
 const server = createServer(httpsOptions, async (req, res) => {
 	// TODO: convert long if-else chains to switch
-	const url = new URL(req.url ?? "/404.html", `http://${req.headers.host}`);
-	if (url.pathname === "/") {
-		url.pathname = "/home";
-	}
+	const context: RequestContext = {
+		userId: "",
+		isAuthenticated: false,
+		request: req,
+		response: res,
+		URL: new URL(req.url ?? "/404.html", `http://${req.headers.host}`),
+		isAuthorized: false,
+	};
 
-	LOG_DELIMITER();
-	console.log(`Path: ${url.pathname}`);
-	if (url.search.length > 0) {
-		console.log(`Search: ${url.search}`);
-		for (const [name, value] of url.searchParams) {
-			console.log(`Search Param: ${name} = ${value}`);
-		}
+	if (context.URL.pathname === "/") {
+		context.URL.pathname = "/home";
 	}
+	await authenticate(context);
+	logRequest(context);
+	authorize(context);
 
-	// log delimiter on close, in case there is logging by other functions related to the same request
-	// this breaks when multiple requests happen simultaniously
-	// TODO: fix this
-	res.on("close", () => {
-		LOG_DELIMITER();
-		console.log("\n\n\n");
-	});
-
-	if (req.method === "GET") {
-		if (extname(url.pathname) === ".js") {
-			return serveJS(res, url.pathname);
-		}
-		return serveHTML(res, url.pathname);
+	if (!context.isAuthorized) {
+		setResponseHeaders(context);
+		return respond(context);
 	}
-	if (req.method === "POST") {
-		// const buffer = Buffer.from()
-		if (url.pathname === UPLOAD_METADATA_ROUTE) {
-			return handleMetaData(req, res);
-		}
-		if (url.pathname === UPLOAD_FILE_ROUTE) {
-			console.log(req.headers);
-			return handleUpload(req, res, url);
-		}
-		if (url.pathname === USER_REGISTRATION_ROUTE) {
-			return registerUser(req, res);
-		}
-		if (url.pathname === LOGIN_USER_ROUTE) {
-			return loginUser(req, res);
-		}
-	}
+	await handleRequest(context);
 
-	// TODO: return bad request
+	setResponseHeaders(context);
+	return respond(context);
 });
 
 server.listen(PORT);
