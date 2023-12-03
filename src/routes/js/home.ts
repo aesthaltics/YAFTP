@@ -22,7 +22,7 @@ const sendMetaData = async (files: FileList) => {
 		body: JSON.stringify(filesMetaDataToJSON(files)),
 	});
 	const serverResponse = await fetch(request);
-	return await serverResponse.text();
+	return await serverResponse.json();
 };
 
 const uploadFile = async (file: File, fileTransferID: string) => {
