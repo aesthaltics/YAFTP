@@ -1,6 +1,6 @@
 import { IncomingMessage, ServerResponse } from "http";
 import { requestDataToJSON } from "./server.js";
-import pg from "pg";
+import { query } from "./database.js";
 import { scrypt, randomBytes } from "crypto";
 import {
 	DATABASE_TABLES,
@@ -8,58 +8,44 @@ import {
 	ONE_GB_IN_BYTES,
 } from "./serverInfo.js";
 import { Readable } from "stream";
+import { LOG_LEVEL } from "./serverInfo.js";
 
-const { Client } = pg;
-const client = await (async () => {
-	const client = new Client({
-		host: process.env.DATABASE_HOST,
-		port: process.env.DATABASE_PORT,
-		database: process.env.DATABASE_NAME,
-		user: process.env.DATABASE_USER,
-	});
-	await client.connect();
-	return client;
-})();
+const durationInMs = ({
+	hours = 0,
+	minutes = 0,
+	seconds = 0,
+}: {
+	hours?: number;
+	minutes?: number;
+	seconds?: number;
+}) => {
+	minutes = hours * 60 + minutes;
+	seconds = minutes * 60 + seconds;
+	return seconds * 1000;
+};
 
-const userFromAuthorizationHeader = (header?: string): User => {
+const userFromAuthorizationHeader = (
+	header?: string,
+	log?: Logger
+): User | undefined => {
+	// TODO: is this func using the correct log levels?
 	if (header === undefined) {
-		throw new Error("authorization header not provided");
+		if (log) {
+			log("authorization header not provided", "NOTICE");
+		}
+		return;
 	}
 	const [scheme, params] = header.split(" ");
 	if (scheme !== "Basic") {
-		throw new Error("not using correct scheme");
+		if (log) {
+			log("not using correct auth scheme", "NOTICE");
+		}
 	}
-	const [userName, password] = atob(params).split(":");
+	const [username, password] = atob(params).split(":");
 	return {
-		username: userName,
+		username: username,
 		password: password,
 	};
-};
-
-const databaseInsert = async (
-	table: string,
-	columns: string[],
-	values: any[]
-) => {
-	if (columns.length !== values.length) {
-		Promise.reject(
-			new Error("columns and values must have the same length")
-		);
-	}
-	const valuesString = values
-		.map((_, index) => {
-			return `$${index + 1}`;
-		})
-		.join(", ");
-	const insertText = `INSERT INTO ${table}(${columns.join(
-		", "
-	)}) VALUES(${valuesString})`;
-	try {
-		console.log(`Query sent to db: ${insertText}`);
-		return await client.query(insertText, values);
-	} catch (error) {
-		Promise.reject(error);
-	}
 };
 
 const isExactUser = (obj: any): obj is User => {
@@ -133,52 +119,64 @@ const stringifyHashAndSalt = ({
 };
 
 const authenticateUser = async (user: User): Promise<boolean> => {
-	console.log(user)
-	if (!isExactUser(user)) {
-		Promise.reject(new Error("did not get valid user object"));
-	}
-	const hashAndSaltQuery = {
-		// putting user name in values prevent intjection attacks
-		text: "SELECT users.password, users.salt FROM users WHERE users.user_name = $1;",
-		values: [user.username],
-	};
-	const hashAndSaltResponse = await client.query(hashAndSaltQuery);
-	if (!hashAndSaltResponse.rowCount || hashAndSaltResponse.rowCount < 1) {
-		// username not in database
-		return false;
-	}
-	if (hashAndSaltResponse.rowCount > 1) {
-		// TODO: handle multiple users with same name(should never happen as username col has unique requirement)
-		return false;
-	}
+	return new Promise((resolve, reject) => {
+		if (!isExactUser(user)) {
+			// TODO: convert this to log
+			return false;
+			reject(new Error("did not get valid user object"));
+		}
+		query(
+			"SELECT users.password, users.salt FROM users WHERE users.user_name = $1",
+			[user.username],
+			async (err, result) => {
+				if (err || !result.rowCount || result.rowCount < 1) {
+					// username not in database
+					return resolve(false);
+				}
+				if (result.rowCount > 1) {
+					// TODO: handle multiple users with same name(should never happen as username col has unique requirement)
+					return resolve(false);
+				}
+				const storedSalt: string = result.rows[0]["salt"];
+				const storedPasswordHash: string = result.rows[0]["password"];
 
-	const storedSalt: string = hashAndSaltResponse.rows[0]["salt"];
-	const storedPasswordHash: string = hashAndSaltResponse.rows[0]["password"];
+				const {
+					hash: submittedPasswordHash,
+					salt: submittedPasswordSalt,
+				} = await hashPassword(user.password, storedSalt);
 
-	const { hash: submittedPasswordHash, salt: submittedPasswordSalt } =
-		await hashPassword(user.password, storedSalt);
-
-	return (
-		storedPasswordHash === submittedPasswordHash &&
-		storedSalt === submittedPasswordSalt
-	);
+				resolve(
+					storedPasswordHash === submittedPasswordHash &&
+						storedSalt === submittedPasswordSalt
+				);
+			}
+		);
+	});
 };
 
 const storeUser = async (user: User) => {
 	// TODO: Don't allow usernames that already exists
-	const table = DATABASE_TABLES.users;
+	const {
+		table_name,
+		user_name,
+		password,
+		salt: saltCol,
+		max_space,
+	} = DATABASE_TABLES.users;
 	const { hash, salt } = await hashPassword(user.password);
 	console.log(hash);
-	return await databaseInsert(
-		table.table_name,
-		[table.user_name, table.password, table.salt, table.max_space],
-		[user.username, hash, salt, ONE_GB_IN_BYTES]
+	query(
+		`INSERT INTO ${table_name}(${user_name}, ${password}, ${saltCol}, ${max_space}) VALUES($1, $2, $3, $4)`,
+		[user.username, hash, salt, ONE_GB_IN_BYTES],
+		(err, result) => {
+			return;
+		}
 	);
 };
 
 const registerUser = async (req: IncomingMessage) => {
 	// const userData = await requestDataToJSON(req);
-	const userData = userFromAuthorizationHeader(req.headers.authorization)
+	const userData = userFromAuthorizationHeader(req.headers.authorization);
 	if (isExactUser(userData)) {
 		// TODO: handle this log
 		// console.log(`user details: ${userData}`);
@@ -206,51 +204,88 @@ const registerUser = async (req: IncomingMessage) => {
 	}
 };
 
-const loginUser = async (context: RequestContext) => {
+const loginUserBasicToken = async (
+	context: RequestContext,
+	store: TokenStore,
+	log?: Logger
+): Promise<string | undefined> => {
+	// TODO: is this func using the correct log levels?
+
 	const SUCCESS_MESSAGE = "success";
 	const FAIL_MESSAGE = "fail";
-	// TODO: create and respond with session token
-	// const user = await requestDataToJSON(context.request);
-	const user = userFromAuthorizationHeader(
-		context.request.headers.authorization
-	);
-	if (!isExactUser(user)) {
-		context.response.writeHead(401, {
-			"Content-Type": "application/json",
-			"x-content-type-options": "nosniff",
-		});
-		context.stream = Readable.from(
-			JSON.stringify({ message: FAIL_MESSAGE })
-		);
-		return Promise.reject(
-			new Error("provided data is not a valid user object")
-		);
-	}
-	const authenticated = await authenticateUser(user);
 
-	if (authenticated) {
-		context.response.writeHead(200, {
-			"Content-Type": "application/json",
-			"x-content-type-options": "nosniff",
-		});
-
-		context.stream = Readable.from(
-			JSON.stringify({ message: SUCCESS_MESSAGE })
-		);
+	if (!context.isAuthenticated) {
+		if (log) {
+			log(
+				"Speaker: loginUserBasicToken\n Message: User is not authenticated! How did this function even get called?",
+				"WARNING"
+			);
+		}
 		return;
 	}
-	context.response.writeHead(401, {
-		"Content-Type": "application/json",
-		"x-content-type-options": "nosniff",
+
+	if (!context.userId || context.userId.length < 1) {
+		if (log) {
+			log(
+				"Speaker: loginUserBasicToken\n Message: No or emtpy userId! How did this function even get called?",
+				"WARNING"
+			);
+		}
+		return;
+	}
+
+	const tokenID = store.create({
+		expiry: new Date(Date.now() + durationInMs({ minutes: 10 })),
+		username: context.userId,
+		attributes: {},
 	});
-	context.stream = Readable.from(JSON.stringify({ message: FAIL_MESSAGE }));
-	return Promise.reject(new Error("Unsuccessful login attempt"));
+
+	return tokenID;
+};
+
+const handleLogin = async (context: RequestContext, store: TokenStore) => {
+	const SUCCESS_MESSAGE = "success";
+	const FAIL_MESSAGE = "fail";
+
+	context.response.setHeader("Content-Type", "application/json");
+	context.response.setHeader("x-content-type-options", "nosniff");
+
+	const acceptLogin = (tokenID: string) => {
+		context.response.statusCode = 200;
+		context.response.statusMessage = "OK";
+
+		// TODO: set session cookie to tokenid instead of sending it in json
+
+		context.stream = Readable.from(
+			JSON.stringify({ message: SUCCESS_MESSAGE, token: tokenID })
+		);
+		return;
+	};
+
+	const denyLogin = () => {
+		context.response.statusCode = 401;
+		context.response.statusMessage = "Unauthorized";
+
+		context.stream = Readable.from(
+			JSON.stringify({ message: FAIL_MESSAGE, token: undefined })
+		);
+		return;
+	};
+
+	const tokenID = await loginUserBasicToken(context, store);
+
+	if (!tokenID || tokenID.length < 1) {
+		return denyLogin();
+	}
+	if (tokenID) {
+		return acceptLogin(tokenID);
+	}
 };
 
 export {
 	registerUser,
 	isExactUser,
-	loginUser,
+	handleLogin,
 	authenticateUser,
 	userFromAuthorizationHeader,
 };
