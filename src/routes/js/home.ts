@@ -20,6 +20,9 @@ const sendMetaData = async (files: FileList) => {
 	let request = new Request(UPLOAD_METADATA_ROUTE, {
 		method: "POST",
 		body: JSON.stringify(filesMetaDataToJSON(files)),
+		headers: new Headers({
+			'Content-Type': 'application/json'
+		})
 	});
 	const serverResponse = await fetch(request);
 	return await serverResponse.json();

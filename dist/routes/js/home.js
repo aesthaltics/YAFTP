@@ -27,9 +27,12 @@ const sendMetaData = (files) => __awaiter(void 0, void 0, void 0, function* () {
     let request = new Request(UPLOAD_METADATA_ROUTE, {
         method: "POST",
         body: JSON.stringify(filesMetaDataToJSON(files)),
+        headers: new Headers({
+            'Content-Type': 'application/json'
+        })
     });
     const serverResponse = yield fetch(request);
-    return yield serverResponse.text();
+    return yield serverResponse.json();
 });
 const uploadFile = (file, fileTransferID) => __awaiter(void 0, void 0, void 0, function* () {
     // upload file url = /file_upload?id=${id}&file=${filename}
