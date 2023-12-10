@@ -6,8 +6,15 @@ import fsAsync from "fs/promises";
 import { URL, fileURLToPath } from "url";
 import path, { extname, resolve } from "path";
 import pg from "pg";
-import { authenticateUser, loginUser, registerUser } from "./auth.js";
+import {
+	authenticateUser,
+	loginUser,
+	registerUser,
+	userFromAuthorizationHeader,
+} from "./auth.js";
 import { Readable } from "stream";
+import { DATABASE_TABLES, LOG_LEVEL  } from "./serverInfo.js";
+import { randomUUID } from "crypto";
 
 const { Client } = pg;
 
@@ -71,26 +78,53 @@ export const requestDataToJSON = async (req: IncomingMessage) => {
 	});
 };
 
+const createLogger = async (requestId: string, username?: string) => {
+	let userId = 1;
+	if (username) {
+		const userIdQueryResponse = await client.query({
+			text: `SELECT ${DATABASE_TABLES.users.user_id} FROM ${DATABASE_TABLES.users.table_name} WHERE ${DATABASE_TABLES.users.user_name} = $1;`,
+			values: [username],
+		});
+		userId =
+			userIdQueryResponse.rows[0][`${DATABASE_TABLES.users.user_id}`];
+	}
+
+	const logMessage = async (logText: string, logLevel: LOG_LEVEL = 'INFO'): Promise<void> => {
+		const {user_id, log_text, request_id, log_level} = DATABASE_TABLES.log
+		const insertText = `INSERT INTO log(${user_id}, ${log_text}, ${request_id}, ${log_level}) VALUES($1, $2, $3, $4) RETURNING *`;
+		const insertedValue = [userId, logText, requestId, logLevel];
+		await client.query(insertText, insertedValue);
+	};
+
+	return logMessage;
+};
+
 const insertFileToDatabase = async (
-	fileName: string,
-	filePath: string,
-	fileType: string,
-	fileSize: number
+	name: string,
+	path: string,
+	type: string,
+	size: number
 ) => {
-	const insertText = `INSERT INTO files(\"FilePath\", \"${filesColumns.fileName}\", \"${filesColumns.fileType}\", \"${filesColumns.fileSize}\") VALUES($1, $2, $3, $4) RETURNING *`;
-	const insertedValue = [filePath, fileName, fileType, fileSize];
+	// TODO: update this function
+	// TODO: make sure the user has enough space
+	const {table_name, file_name, file_type, file_size, file_path} = DATABASE_TABLES.files
+	const insertText = `INSERT INTO ${table_name}(${file_path}, ${file_name}, ${file_type}, ${file_size}) VALUES($1, $2, $3, $4) RETURNING *`;
+	const insertedValue = [path, name, type, size];
 	const res = await client.query(insertText, insertedValue);
-	console.log(res.rows[0]);
+
 };
 
 const handleMetaData = async (req: IncomingMessage, res: ServerResponse) => {
+	// TODO: update this function
+
 	const currentTime = Date.now().toString();
 	const directoryPath = path.join(STORAGE_DIRECTORY, currentTime);
 	await fsAsync.mkdir(directoryPath, {
 		recursive: true,
 	});
 	const filesArray = await requestDataToJSON(req);
-	console.log(filesArray);
+	// TODO: handle this log
+	// console.log(filesArray);
 
 	if (filesArray instanceof Array) {
 		let promsises = filesArray.map((fileData: fileData) => {
@@ -211,68 +245,56 @@ const serveJS = (filePath: string) => {
 };
 
 const authenticate = async (context: RequestContext) => {
-	// TODO: update client to send authentication header
-	let userID = "";
 	const denyAuthentication = () => {
 		context.isAuthenticated = false;
-		context.userId = userID;
 		return false;
 	};
-	const acceptAuthentication = () => {
+	const acceptAuthentication = (userId: string) => {
 		context.isAuthenticated = true;
-		context.userId = userID;
+		context.userId = userId;
 		return true;
 	};
-	if (context.request.headers.authorization === undefined) {
-		return denyAuthentication();
-	}
-	const [scheme, params] = context.request.headers.authorization.split(" ");
-	if (scheme !== "Basic") {
-		return denyAuthentication();
-	}
-	const [userName, password] = atob(params).split(":");
-
-	userID = userName;
-
 	try {
-		const authenticated = await authenticateUser({
-			username: userName,
-			password: password,
-		});
+		const user = userFromAuthorizationHeader(
+			context.request.headers.authorization
+		);
+		const authenticated = await authenticateUser(user);
 		if (!authenticated) {
 			return denyAuthentication();
 		}
-		return acceptAuthentication();
+		return acceptAuthentication(user.username);
 	} catch (error) {
 		//TODO: handle error
 		return denyAuthentication();
 	}
 };
 
-const logRequest = (context: RequestContext) => {
-	//TODO: implement proper logging
-	let logString = "";
-	const delimiter = "\n------------------\n";
+const logRequest = async (context: RequestContext): Promise<void> => {
+	if (context.log === undefined) {
+		Promise.reject(new Error("context do not have logger"));
+		return;
+	}
 
-	logString += delimiter;
-	logString += `Authenticated: ${context.isAuthenticated}\n`;
-	logString += `Username: ${context.userId}\n`;
-	logString += `Method: ${context.request.method}\n`;
-	logString += `Path: ${context.URL.pathname}\n`;
+	let logMessages = [];
+
+	logMessages.push(`Authenticated: ${context.isAuthenticated}`);
+	logMessages.push(`Username: ${context.userId}`);
+	logMessages.push(`Method: ${context.request.method}`);
+	logMessages.push(`Path: ${context.URL.pathname}`);
 
 	if (context.URL.search.length > 0) {
-		logString += `Search: ${context.URL.search}\n`;
+		logMessages.push(`Search: ${context.URL.search}\n`);
 		for (const [name, value] of context.URL.searchParams) {
-			logString += `Search Param: ${name} = ${value}\n`;
+			logMessages.push(`Search Param: ${name} = ${value}`);
 		}
 	}
 
-	logString += delimiter;
-
-	context.response.on("close", () => {
-		console.log(logString);
+	let promises = logMessages.map((message) => {
+		if (context.log) {
+			context.log(message);
+		}
 	});
-	return;
+	await Promise.all(promises);
 };
 
 const authorizeGet = (context: RequestContext) => {
@@ -290,13 +312,18 @@ const authorizePost = (context: RequestContext) => {
 };
 
 const authorize = (context: RequestContext) => {
+
 	const method = context.request.method;
 
 	if (method === undefined) {
 		return;
 	}
 
-	switch (method) {
+	// if (!context.isAuthenticated){
+	// 	return false
+	// }
+
+	switch (method.toString().toLowerCase()) {
 		case "get":
 			return authorizeGet(context);
 		case "post":
@@ -312,6 +339,7 @@ const setResponseHeaders = (context: RequestContext) => {
 		if (!context.isAuthenticated) {
 			// Client provided wrong or no credentials
 			// TODO: set WWW-Autheticate header?
+			context.response.setHeader("WWW-Authenticate", 'Basic realm="/"');
 			context.response.writeHead(401, "Unauthorized");
 		} else {
 			// Client not authorized to do this action
@@ -334,7 +362,7 @@ const handleRequest = async (context: RequestContext) => {
 	if (method === undefined) {
 		return;
 	}
-	switch (method) {
+	switch (method.toString().toLowerCase()) {
 		case "get":
 			await handleGet(context);
 			break;
@@ -349,14 +377,22 @@ const handleRequest = async (context: RequestContext) => {
 const handleGet = async (context: RequestContext) => {
 	const path = context.URL.pathname;
 	let stream: Readable | undefined;
-	if (extname(path) === ".js") {
-		stream = await serveJS(path);
-	} else {
-		stream = await serveHTML(path);
-	}
-	if (stream === undefined) {
+	try {
+		if (extname(path) === ".js") {
+			stream = await serveJS(path);
+			context.response.setHeader("Content-Type", "text/javascript");
+		} else {
+			stream = await serveHTML(path);
+			context.response.setHeader("Content-Type", "text/html");
+		}
+	} catch (error) {
 		stream = serve404();
+		context.response.writeHead(404, "Not Found");
+		if (context.log) {
+			context.log(`Could not find route for: ${path}`);
+		}
 	}
+
 	context.stream = stream;
 };
 
@@ -392,7 +428,7 @@ const handlePost = async (context: RequestContext): Promise<void> => {
 			context.response.setHeader("Content-Type", "application/json");
 			context.response.setHeader("x-content-type-options", "nosniff");
 			try {
-				registerUser(context.request);
+				await registerUser(context.request);
 				context.response.writeHead(200, "OK");
 				context.stream = Readable.from(
 					JSON.stringify({ message: "User created" })
@@ -407,7 +443,7 @@ const handlePost = async (context: RequestContext): Promise<void> => {
 			break;
 		case LOGIN_USER_ROUTE:
 			try {
-				loginUser(context);
+				await loginUser(context);
 			} catch (error) {
 				return Promise.reject(error);
 			}
@@ -424,9 +460,10 @@ const httpsOptions = {
 };
 
 const server = createServer(httpsOptions, async (req, res) => {
-	// TODO: convert long if-else chains to switch
+	// TODO: log total time from recieved request to complete response
 	const context: RequestContext = {
-		userId: "",
+		
+		requestId: randomUUID(),
 		isAuthenticated: false,
 		request: req,
 		response: res,
@@ -438,13 +475,16 @@ const server = createServer(httpsOptions, async (req, res) => {
 		context.URL.pathname = "/home";
 	}
 	await authenticate(context);
-	logRequest(context);
+
+	context.log = await createLogger(context.requestId, context.userId);
+	await logRequest(context);
 	authorize(context);
 
 	if (!context.isAuthorized) {
 		setResponseHeaders(context);
 		return respond(context);
 	}
+
 	await handleRequest(context);
 
 	setResponseHeaders(context);
