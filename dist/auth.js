@@ -7,10 +7,10 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
         step((generator = generator.apply(thisArg, _arguments || [])).next());
     });
 };
-import { requestDataToJSON } from "./server.js";
 import pg from "pg";
 import { scrypt, randomBytes } from "crypto";
 import { DATABASE_TABLES, SCRYPT_VARIABLES, ONE_GB_IN_BYTES, } from "./serverInfo.js";
+import { Readable } from "stream";
 const { Client } = pg;
 const client = await (() => __awaiter(void 0, void 0, void 0, function* () {
     const client = new Client({
@@ -22,6 +22,20 @@ const client = await (() => __awaiter(void 0, void 0, void 0, function* () {
     yield client.connect();
     return client;
 }))();
+const userFromAuthorizationHeader = (header) => {
+    if (header === undefined) {
+        throw new Error("authorization header not provided");
+    }
+    const [scheme, params] = header.split(" ");
+    if (scheme !== "Basic") {
+        throw new Error("not using correct scheme");
+    }
+    const [userName, password] = atob(params).split(":");
+    return {
+        username: userName,
+        password: password,
+    };
+};
 const databaseInsert = (table, columns, values) => __awaiter(void 0, void 0, void 0, function* () {
     if (columns.length !== values.length) {
         Promise.reject(new Error("columns and values must have the same length"));
@@ -44,7 +58,7 @@ const isExactUser = (obj) => {
     // Check for the correct type and existence of each expected property
     const hasValidProps = obj &&
         typeof obj === "object" &&
-        typeof obj.userName === "string" &&
+        typeof obj.username === "string" &&
         typeof obj.password === "string";
     if (!hasValidProps) {
         console.log("user does not have valid props");
@@ -88,13 +102,14 @@ const stringifyHashAndSalt = ({ hash, salt, }) => {
     return { stringifiedHash, stringifiedSalt };
 };
 const authenticateUser = (user) => __awaiter(void 0, void 0, void 0, function* () {
+    console.log(user);
     if (!isExactUser(user)) {
         Promise.reject(new Error("did not get valid user object"));
     }
     const hashAndSaltQuery = {
         // putting user name in values prevent intjection attacks
         text: "SELECT users.password, users.salt FROM users WHERE users.user_name = $1;",
-        values: [user.userName],
+        values: [user.username],
     };
     const hashAndSaltResponse = yield client.query(hashAndSaltQuery);
     if (!hashAndSaltResponse.rowCount || hashAndSaltResponse.rowCount < 1) {
@@ -116,64 +131,66 @@ const storeUser = (user) => __awaiter(void 0, void 0, void 0, function* () {
     const table = DATABASE_TABLES.users;
     const { hash, salt } = yield hashPassword(user.password);
     console.log(hash);
-    return yield databaseInsert(table.table_name, [table.user_name, table.password, table.salt, table.max_space], [user.userName, hash, salt, ONE_GB_IN_BYTES]);
+    return yield databaseInsert(table.table_name, [table.user_name, table.password, table.salt, table.max_space], [user.username, hash, salt, ONE_GB_IN_BYTES]);
 });
-const registerUser = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
-    const userData = yield requestDataToJSON(req);
+const registerUser = (req) => __awaiter(void 0, void 0, void 0, function* () {
+    // const userData = await requestDataToJSON(req);
+    const userData = userFromAuthorizationHeader(req.headers.authorization);
     if (isExactUser(userData)) {
-        console.log(`user details: ${userData}`);
+        // TODO: handle this log
+        // console.log(`user details: ${userData}`);
         try {
             const queryResult = yield storeUser(userData);
-            res.writeHead(200, {
-                "Content-Type": "application/json",
-                "x-content-type-options": "nosniff",
-            });
-            return res.end(JSON.stringify({ message: "user created!" }));
+            return;
         }
         catch (error) {
-            console.log(`there was a problem inserting the user to the database: ${JSON.stringify(userData)}`);
-            res.writeHead(400, {
-                "Content-Type": "application/json",
-                "x-content-type-options": "nosniff",
-            });
-            return res.end(JSON.stringify({ message: "could not create user" }));
+            // TODO: handle this log
+            // console.log(
+            // 	`there was a problem inserting the user to the database: ${JSON.stringify(
+            // 		userData
+            // 	)}`
+            // );
+            return Promise.reject("could not register user");
         }
     }
     else {
-        console.log(`the userdata is not formatted correctly: ${JSON.stringify(userData)}`);
-        res.writeHead(400, {
-            "Content-Type": "application/json",
-            "x-content-type-options": "nosniff",
-        });
-        return res.end(JSON.stringify({ message: "could not create user" }));
+        // TODO: handle this log
+        // console.log(
+        // 	`the userdata is not formatted correctly: ${JSON.stringify(
+        // 		userData
+        // 	)}`
+        // );
+        return Promise.reject("could not register user");
     }
 });
-const loginUser = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+const loginUser = (context) => __awaiter(void 0, void 0, void 0, function* () {
     const SUCCESS_MESSAGE = "success";
     const FAIL_MESSAGE = "fail";
     // TODO: create and respond with session token
-    const user = yield requestDataToJSON(req);
+    // const user = await requestDataToJSON(context.request);
+    const user = userFromAuthorizationHeader(context.request.headers.authorization);
     if (!isExactUser(user)) {
-        res.writeHead(401, {
+        context.response.writeHead(401, {
             "Content-Type": "application/json",
             "x-content-type-options": "nosniff",
         });
-        res.end(JSON.stringify({ message: FAIL_MESSAGE }));
-        return Promise.reject(new Error("provided data is not a valid user"));
+        context.stream = Readable.from(JSON.stringify({ message: FAIL_MESSAGE }));
+        return Promise.reject(new Error("provided data is not a valid user object"));
     }
     const authenticated = yield authenticateUser(user);
     if (authenticated) {
-        res.writeHead(200, {
+        context.response.writeHead(200, {
             "Content-Type": "application/json",
             "x-content-type-options": "nosniff",
         });
-        return res.end(JSON.stringify({ message: SUCCESS_MESSAGE }));
+        context.stream = Readable.from(JSON.stringify({ message: SUCCESS_MESSAGE }));
+        return;
     }
-    res.writeHead(401, {
+    context.response.writeHead(401, {
         "Content-Type": "application/json",
         "x-content-type-options": "nosniff",
     });
-    return res.end(JSON.stringify({ message: FAIL_MESSAGE }));
-    // return Promise.reject(new Error("provided data is not a valid user"));
+    context.stream = Readable.from(JSON.stringify({ message: FAIL_MESSAGE }));
+    return Promise.reject(new Error("Unsuccessful login attempt"));
 });
-export { registerUser, isExactUser, loginUser };
+export { registerUser, isExactUser, loginUser, authenticateUser, userFromAuthorizationHeader, };

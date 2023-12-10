@@ -1,8 +1,6 @@
 import { IncomingMessage, ServerResponse } from "http";
 import { requestDataToJSON } from "./server.js";
 import pg from "pg";
-import { nextTick } from "process";
-import { error, table } from "console";
 import { scrypt, randomBytes } from "crypto";
 import {
 	DATABASE_TABLES,
@@ -22,6 +20,21 @@ const client = await (async () => {
 	await client.connect();
 	return client;
 })();
+
+const userFromAuthorizationHeader = (header?: string): User => {
+	if (header === undefined) {
+		throw new Error("authorization header not provided");
+	}
+	const [scheme, params] = header.split(" ");
+	if (scheme !== "Basic") {
+		throw new Error("not using correct scheme");
+	}
+	const [userName, password] = atob(params).split(":");
+	return {
+		username: userName,
+		password: password,
+	};
+};
 
 const databaseInsert = async (
 	table: string,
@@ -54,7 +67,7 @@ const isExactUser = (obj: any): obj is User => {
 	const hasValidProps =
 		obj &&
 		typeof obj === "object" &&
-		typeof obj.userName === "string" &&
+		typeof obj.username === "string" &&
 		typeof obj.password === "string";
 	if (!hasValidProps) {
 		console.log("user does not have valid props");
@@ -120,6 +133,7 @@ const stringifyHashAndSalt = ({
 };
 
 const authenticateUser = async (user: User): Promise<boolean> => {
+	console.log(user)
 	if (!isExactUser(user)) {
 		Promise.reject(new Error("did not get valid user object"));
 	}
@@ -163,7 +177,8 @@ const storeUser = async (user: User) => {
 };
 
 const registerUser = async (req: IncomingMessage) => {
-	const userData = await requestDataToJSON(req);
+	// const userData = await requestDataToJSON(req);
+	const userData = userFromAuthorizationHeader(req.headers.authorization)
 	if (isExactUser(userData)) {
 		// TODO: handle this log
 		// console.log(`user details: ${userData}`);
@@ -195,7 +210,10 @@ const loginUser = async (context: RequestContext) => {
 	const SUCCESS_MESSAGE = "success";
 	const FAIL_MESSAGE = "fail";
 	// TODO: create and respond with session token
-	const user = await requestDataToJSON(context.request);
+	// const user = await requestDataToJSON(context.request);
+	const user = userFromAuthorizationHeader(
+		context.request.headers.authorization
+	);
 	if (!isExactUser(user)) {
 		context.response.writeHead(401, {
 			"Content-Type": "application/json",
@@ -219,7 +237,7 @@ const loginUser = async (context: RequestContext) => {
 		context.stream = Readable.from(
 			JSON.stringify({ message: SUCCESS_MESSAGE })
 		);
-		return
+		return;
 	}
 	context.response.writeHead(401, {
 		"Content-Type": "application/json",
@@ -229,4 +247,10 @@ const loginUser = async (context: RequestContext) => {
 	return Promise.reject(new Error("Unsuccessful login attempt"));
 };
 
-export { registerUser, isExactUser, loginUser, authenticateUser };
+export {
+	registerUser,
+	isExactUser,
+	loginUser,
+	authenticateUser,
+	userFromAuthorizationHeader,
+};
