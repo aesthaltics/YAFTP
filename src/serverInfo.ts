@@ -1,4 +1,4 @@
-
+import { simpleTokenStore } from "./token.js";
 const DATABASE_TABLES = {
 	// TODO: this feels kinda weird(maybe change to individual types?)
 	users: {
@@ -27,12 +27,19 @@ const DATABASE_TABLES = {
 		file_size: 'file_size',
 		last_change: 'last_change',
 		transfer: 'transfer'
+	},
+	simple_tokens: {
+		table_name: 'simple_tokens',
+		simple_tokens_id: 'simple_tokens_id',
+		user_name: 'user_name',
+		expiry: 'expiry'
 	}
 } as const;
 
-type LOG_LEVEL = 'DEBUG' | 'INFO' | 'NOTICE' | 'WARNING' | 'ERROR' | 'CRITICAL' | 'ALERT' | 'EMERGENCY'
 type FILE_PRIVLIGE = 'READ' | 'WRITE'
 type TRANSFER_STATUS = 'SCHEDULED' | 'IN PROGRESS' | 'COMPLETE' | 'CANCELED' | 'FAILED'
+
+const tokenStore = simpleTokenStore
 
 
 const SCRYPT_VARIABLES = {
@@ -47,4 +54,4 @@ const SCRYPT_VARIABLES = {
 
 const ONE_GB_IN_BYTES = 10 ** 9;
 
-export { DATABASE_TABLES, SCRYPT_VARIABLES, ONE_GB_IN_BYTES, LOG_LEVEL, FILE_PRIVLIGE, TRANSFER_STATUS };
+export { DATABASE_TABLES, SCRYPT_VARIABLES, ONE_GB_IN_BYTES, LOG_LEVEL, FILE_PRIVLIGE, TRANSFER_STATUS, tokenStore};
