@@ -9,17 +9,18 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
 };
 const REGISTER_USER_ROUTE = "/register-user";
 const requestRegistration = (user) => __awaiter(void 0, void 0, void 0, function* () {
-    if (user.userName.length < 1 || user.password.length < 1) {
+    if (user.username.length < 1 || user.password.length < 1) {
         Promise.reject(new Error("not given username or password"));
     }
-    const stringifiedUser = JSON.stringify(user);
-    console.log(stringifiedUser);
+    // const stringifiedUser = JSON.stringify(user);
+    // console.log(stringifiedUser);
     const response = yield fetch(REGISTER_USER_ROUTE, {
         method: "POST",
-        body: stringifiedUser,
+        // body: stringifiedUser,
         headers: {
-            'Content-Type': 'text/javascript'
-        }
+            "Content-Type": "text/javascript",
+            Authorization: `Basic ${btoa(`${user.username}:${user.password}`)}`,
+        },
     });
     console.log(yield response.json());
 });
@@ -32,7 +33,7 @@ window.addEventListener("load", (event) => {
         if (userNameElement instanceof HTMLInputElement &&
             passwordElement instanceof HTMLInputElement) {
             const userDetails = {
-                userName: userNameElement.value,
+                username: userNameElement.value,
                 password: passwordElement.value,
             };
             console.log(userDetails);

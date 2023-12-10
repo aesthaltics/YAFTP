@@ -4,13 +4,14 @@ const requestRegistration = async (user: User) => {
 	if (user.username.length < 1 || user.password.length < 1) {
 		Promise.reject(new Error("not given username or password"));
 	}
-	const stringifiedUser = JSON.stringify(user);
-	console.log(stringifiedUser);
+	// const stringifiedUser = JSON.stringify(user);
+	// console.log(stringifiedUser);
 	const response = await fetch(REGISTER_USER_ROUTE, {
 		method: "POST",
-		body: stringifiedUser,
+		// body: stringifiedUser,
 		headers: {
 			"Content-Type": "text/javascript",
+			Authorization: `Basic ${btoa(`${user.username}:${user.password}`)}`,
 		},
 	});
 	console.log(await response.json());
