@@ -18,13 +18,15 @@ declare global {
 	};
 
 	type RequestContext= {
-		userId: string;
+		requestId: string
+		userId?: string;
 		isAuthenticated: boolean;
 		request: IncomingMessage;
 		response: ServerResponse;
 		URL: URL;
 		isAuthorized: boolean;
 		stream?: Readable
+		log?: (logText: string) => void
 	};
 }
 
