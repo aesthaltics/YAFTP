@@ -5,18 +5,18 @@ import fs from "fs";
 import fsAsync from "fs/promises";
 import { URL, fileURLToPath } from "url";
 import path, { extname, resolve } from "path";
-import pg from "pg";
 import {
 	authenticateUser,
-	loginUser,
+	handleLogin,
 	registerUser,
 	userFromAuthorizationHeader,
 } from "./auth.js";
 import { Readable } from "stream";
-import { DATABASE_TABLES, LOG_LEVEL  } from "./serverInfo.js";
+import { DATABASE_TABLES, LOG_LEVEL, tokenStore } from "./serverInfo.js";
 import { randomUUID } from "crypto";
+import { query } from "./database.js";
 
-const { Client } = pg;
+
 
 type fileData = {
 	name: string;
@@ -50,16 +50,7 @@ const LOGIN_USER_ROUTE = "/login-user";
 
 const PORT = 42069;
 
-const client = await (async () => {
-	const client = new Client({
-		host: process.env.DATABASE_HOST,
-		port: process.env.DATABASE_PORT,
-		database: process.env.DATABASE_NAME,
-		user: process.env.DATABASE_USER,
-	});
-	await client.connect();
-	return client;
-})();
+
 
 export const requestDataToJSON = async (req: IncomingMessage) => {
 	let stringifiedJSON = "";
@@ -89,8 +80,12 @@ const createLogger = async (requestId: string, username?: string) => {
 			userIdQueryResponse.rows[0][`${DATABASE_TABLES.users.user_id}`];
 	}
 
-	const logMessage = async (logText: string, logLevel: LOG_LEVEL = 'INFO'): Promise<void> => {
-		const {user_id, log_text, request_id, log_level} = DATABASE_TABLES.log
+	const logMessage: Logger = async (
+		logText: string,
+		logLevel: LOG_LEVEL = 'INFO'
+	): Promise<void> => {
+		const { user_id, log_text, request_id, log_level } =
+			DATABASE_TABLES.log;
 		const insertText = `INSERT INTO log(${user_id}, ${log_text}, ${request_id}, ${log_level}) VALUES($1, $2, $3, $4) RETURNING *`;
 		const insertedValue = [userId, logText, requestId, logLevel];
 		await client.query(insertText, insertedValue);
@@ -107,11 +102,11 @@ const insertFileToDatabase = async (
 ) => {
 	// TODO: update this function
 	// TODO: make sure the user has enough space
-	const {table_name, file_name, file_type, file_size, file_path} = DATABASE_TABLES.files
+	const { table_name, file_name, file_type, file_size, file_path } =
+		DATABASE_TABLES.files;
 	const insertText = `INSERT INTO ${table_name}(${file_path}, ${file_name}, ${file_type}, ${file_size}) VALUES($1, $2, $3, $4) RETURNING *`;
 	const insertedValue = [path, name, type, size];
 	const res = await client.query(insertText, insertedValue);
-
 };
 
 const handleMetaData = async (req: IncomingMessage, res: ServerResponse) => {
@@ -254,19 +249,22 @@ const authenticate = async (context: RequestContext) => {
 		context.userId = userId;
 		return true;
 	};
-	try {
-		const user = userFromAuthorizationHeader(
-			context.request.headers.authorization
-		);
-		const authenticated = await authenticateUser(user);
-		if (!authenticated) {
-			return denyAuthentication();
-		}
-		return acceptAuthentication(user.username);
-	} catch (error) {
-		//TODO: handle error
+
+	const user = userFromAuthorizationHeader(
+		context.request.headers.authorization,
+		context.log
+	);
+	if (!user) {
 		return denyAuthentication();
 	}
+	const authenticated = await authenticateUser(user);
+	if (!authenticated) {
+		return denyAuthentication();
+	}
+	if (authenticated) {
+		return acceptAuthentication(user.username);
+	}
+	return denyAuthentication();
 };
 
 const logRequest = async (context: RequestContext): Promise<void> => {
@@ -300,6 +298,9 @@ const logRequest = async (context: RequestContext): Promise<void> => {
 const authorizeGet = (context: RequestContext) => {
 	//TODO: implement authorization of getting files etc.
 	//no routes require authentication yet
+
+	// TODO: create whitelist for public routes
+
 	context.isAuthorized = true;
 	return;
 };
@@ -307,12 +308,13 @@ const authorizeGet = (context: RequestContext) => {
 const authorizePost = (context: RequestContext) => {
 	//TODO: implement authorization for sending files etc.
 	//no routes require authentication yet
+
+	// TODO: create whitelist for public routes
 	context.isAuthorized = true;
 	return;
 };
 
 const authorize = (context: RequestContext) => {
-
 	const method = context.request.method;
 
 	if (method === undefined) {
@@ -338,7 +340,7 @@ const setResponseHeaders = (context: RequestContext) => {
 	if (!context.isAuthorized) {
 		if (!context.isAuthenticated) {
 			// Client provided wrong or no credentials
-			// TODO: set WWW-Autheticate header?
+			// TODO: redirect to login route
 			context.response.setHeader("WWW-Authenticate", 'Basic realm="/"');
 			context.response.writeHead(401, "Unauthorized");
 		} else {
@@ -443,7 +445,7 @@ const handlePost = async (context: RequestContext): Promise<void> => {
 			break;
 		case LOGIN_USER_ROUTE:
 			try {
-				await loginUser(context);
+				await handleLogin(context, tokenStore)
 			} catch (error) {
 				return Promise.reject(error);
 			}
@@ -461,8 +463,9 @@ const httpsOptions = {
 
 const server = createServer(httpsOptions, async (req, res) => {
 	// TODO: log total time from recieved request to complete response
+	// TODO: context.userID should change name to username or be converted to actual userid and remain consistent
+	const requestId = randomUUID;
 	const context: RequestContext = {
-		
 		requestId: randomUUID(),
 		isAuthenticated: false,
 		request: req,
@@ -494,5 +497,7 @@ const server = createServer(httpsOptions, async (req, res) => {
 server.listen(PORT);
 
 server.on("listening", async () => {
+	console.log("\n\n --------------------------------------- \n\n");
 	console.log(`Server listening on https://localhost:${PORT}`);
+	console.log("\n\n --------------------------------------- \n\n");
 });
